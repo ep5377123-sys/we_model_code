@@ -708,3 +708,104 @@ alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
 
 plotshape(we_long_fire,  style=shape.triangleup,   location=location.belowbar, size=size.tiny, text="LONG")
 plotshape(we_short_fire, style=shape.triangledown, location=location.abovebar, size=size.tiny, text="SHORT")
+//==================================================================================================
+//====================== WE MODEL: STOP LOSS (2-Candle Swing Logic like 15m) =======================
+//==================================================================================================
+
+//------------------------- Inputs
+sl_enabled      = input.bool(true, "SL: Show Stop Loss", group="WE MODEL")
+sl_padTicks     = input.int(0,     "SL: Padding (ticks)", minval=0, group="WE MODEL")
+sl_dashedLine   = input.bool(true, "SL: Dashed Line", group="WE MODEL")
+sl_showLabel    = input.bool(true, "SL: Show 'SL' Tag", group="WE MODEL")
+sl_labelOffset  = input.int(0,     "SL: Label Vertical Offset (ticks)", minval=0, group="WE MODEL")
+
+pad      = sl_padTicks * syminfo.mintick
+lblPad   = sl_labelOffset * syminfo.mintick
+
+is1m = timeframe.isminutes and timeframe.multiplier == 1
+
+//------------------------- 2-candle swing detection (matches your definition)
+// Swing High: bullish candle then bearish candle -> swing high at HIGH of bullish candle (bar[1])
+// Swing Low : bearish candle then bullish candle -> swing low  at LOW  of bearish candle (bar[1])
+bull_1 = close[1] > open[1]
+bear_1 = close[1] < open[1]
+bull_0 = close > open
+bear_0 = close < open
+
+swingHighNow = bull_1 and bear_0
+swingLowNow  = bear_1 and bull_0
+
+//------------------------- Store most recent swings (PRIOR to setup)
+var float sl_lastSwingHigh  = na
+var int   sl_lastSwingHighT = na
+var float sl_lastSwingLow   = na
+var int   sl_lastSwingLowT  = na
+
+if sl_enabled and is1m
+    if swingHighNow
+        sl_lastSwingHigh  := high[1]
+        sl_lastSwingHighT := time[1]
+
+    if swingLowNow
+        sl_lastSwingLow  := low[1]
+        sl_lastSwingLowT := time[1]
+
+//------------------------- SL prices for signals
+sl_long_price  = (sl_enabled and we_long_fire  and not na(sl_lastSwingLow))  ? (sl_lastSwingLow  - pad) : na
+sl_short_price = (sl_enabled and we_short_fire and not na(sl_lastSwingHigh)) ? (sl_lastSwingHigh + pad) : na
+
+      //------------------------- Draw subtle SL like reference image
+//==================================================================================================
+//============================ DRAW SUBTLE SL (NO BLOCKY LABELS) ===================================
+//==================================================================================================
+
+slColor = color.new(color.gray, 60)
+
+if sl_enabled and is1m
+    // LONG STOP LOSS
+    if we_long_fire and not na(sl_long_price) and not na(sl_lastSwingLowT)
+        line.new(
+            x1 = sl_lastSwingLowT,
+            y1 = sl_long_price,
+            x2 = time + (3 * 60000),
+            y2 = sl_long_price,
+            xloc = xloc.bar_time,
+            extend = extend.none,
+            color = slColor,
+            style = line.style_dotted,
+            width = 1
+        )
+
+        if sl_showLabel
+            label.new(
+                x = time, y = sl_long_price,
+                text = "SL",
+                xloc = xloc.bar_time,
+                style = label.style_none,
+                textcolor = color.rgb(0, 0, 0),
+                size = size.small
+            )
+
+    // SHORT STOP LOSS
+    if we_short_fire and not na(sl_short_price) and not na(sl_lastSwingHighT)
+        line.new(
+            x1 = sl_lastSwingHighT,
+            y1 = sl_short_price,
+            x2 = time + (3 * 60000),
+            y2 = sl_short_price,
+            xloc = xloc.bar_time,
+            extend = extend.none,
+            color = slColor,
+            style = line.style_dotted,
+            width = 1
+        )
+    
+        if sl_showLabel
+            label.new(
+                x = time, y = sl_short_price,
+                text = "SL",
+                xloc = xloc.bar_time,
+                style = label.style_none,
+                textcolor = color.black,
+                size = size.small
+            )
