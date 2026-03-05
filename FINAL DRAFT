@@ -809,3 +809,54 @@ if sl_enabled and is1m
                 textcolor = color.black,
                 size = size.small
             )
+
+//==================================================================================================
+//=========================== MNQ CONTRACT LABEL (NO ALERTS) =======================================
+//==================================================================================================
+
+mnq_preferredRisk = input.float(100, "MNQ: Preferred Risk ($)", step=10, group="MNQ RISK")
+mnq_showMNQLabel  = input.bool(true, "MNQ: Show Contracts Label", group="MNQ RISK")
+
+mnq_dollarsPerPoint = 2.0  // MNQ = $2 per point per contract
+
+// Stop distance (points) from SIGNAL CLOSE to SL
+mnq_stopPts_long  = (we_long_fire  and not na(sl_long_price))  ? math.abs(close - sl_long_price)   : na
+mnq_stopPts_short = (we_short_fire and not na(sl_short_price)) ? math.abs(sl_short_price - close) : na
+
+// Contracts = risk / (points * $/point)
+mnq_raw_long  = (not na(mnq_stopPts_long)  and mnq_stopPts_long  > 0) ? (mnq_preferredRisk / (mnq_stopPts_long  * mnq_dollarsPerPoint)) : na
+mnq_raw_short = (not na(mnq_stopPts_short) and mnq_stopPts_short > 0) ? (mnq_preferredRisk / (mnq_stopPts_short * mnq_dollarsPerPoint)) : na
+
+// Round to nearest whole contract (same idea as +0.5 then floor)
+mnq_long_contracts  = not na(mnq_raw_long)  ? math.floor(mnq_raw_long  + 0.5) : na
+mnq_short_contracts = not na(mnq_raw_short) ? math.floor(mnq_raw_short + 0.5) : na
+
+// Prevent negatives
+mnq_long_contracts  := not na(mnq_long_contracts)  ? math.max(mnq_long_contracts,  0) : na
+mnq_short_contracts := not na(mnq_short_contracts) ? math.max(mnq_short_contracts, 0) : na
+
+// Draw labels (blue for long, red for short)
+if mnq_showMNQLabel and sl_enabled and is1m
+    if we_long_fire and not na(mnq_long_contracts) and not na(sl_long_price)
+        label.new(
+            x = time,
+            y = sl_long_price + (2 * syminfo.mintick),   // slightly above SL line
+            xloc = xloc.bar_time,
+            text = "MNQ: " + str.tostring(mnq_long_contracts),
+            style = label.style_label_up,
+            size = size.tiny,
+            textcolor = color.white,
+            color = color.new(color.blue, 0)
+        )
+
+    if we_short_fire and not na(mnq_short_contracts) and not na(sl_short_price)
+        label.new(
+            x = time,
+            y = sl_short_price + (2 * syminfo.mintick),  // slightly above SL line
+            xloc = xloc.bar_time,
+            text = "MNQ: " + str.tostring(mnq_short_contracts),
+            style = label.style_label_down,
+            size = size.tiny,
+            textcolor = color.white,
+            color = color.new(color.red, 0)
+        )
