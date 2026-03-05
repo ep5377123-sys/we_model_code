@@ -706,12 +706,76 @@ if we_long_fire or we_short_fire
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
 alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
 
-plotshape(we_long_fire,  style=shape.triangleup,   location=location.belowbar, size=size.tiny, text="LONG")
-plotshape(we_short_fire, style=shape.triangledown, location=location.abovebar, size=size.tiny, text="SHORT")
 //==================================================================================================
-//====================== WE MODEL: STOP LOSS (2-Candle Swing Logic like 15m) =======================
+//====================== WE MODEL: ENTRY LINE + LONG/SHORT TEXT (VISIBLE) =========================
 //==================================================================================================
 
+entry_enabled     = input.bool(true, "ENTRY: Show Entry Line + Text", group="WE MODEL")
+entry_extendBars  = input.int(3,     "ENTRY: Extend (bars)", minval=1, maxval=50, group="WE MODEL")
+
+// Colors
+entryLongColor  = color.blue
+entryShortColor = color.red
+
+// Chart timeframe helper
+is1m = timeframe.isminutes and timeframe.multiplier == 1
+barMs = timeframe.multiplier * 60000
+
+if entry_enabled and is1m
+
+    //================ LONG =================
+    if we_long_fire
+
+        entryPrice = close
+
+        line.new(
+            x1 = time,
+            y1 = entryPrice,
+            x2 = time + (entry_extendBars * barMs),
+            y2 = entryPrice,
+            xloc = xloc.bar_time,
+            extend = extend.none,
+            color = entryLongColor,
+            style = line.style_solid,
+            width = 3   // thicker line
+        )
+
+        label.new(
+            x = time + (entry_extendBars * barMs),
+            y = entryPrice,
+            text = "LONG",
+            xloc = xloc.bar_time,
+            style = label.style_none,
+            textcolor = entryLongColor,
+            size = size.normal   // bigger text
+        )
+
+    //================ SHORT =================
+    if we_short_fire
+
+        entryPrice = close
+
+        line.new(
+            x1 = time,
+            y1 = entryPrice,
+            x2 = time + (entry_extendBars * barMs),
+            y2 = entryPrice,
+            xloc = xloc.bar_time,
+            extend = extend.none,
+            color = entryShortColor,
+            style = line.style_solid,
+            width = 3
+        )
+
+        label.new(
+            x = time + (entry_extendBars * barMs),
+            y = entryPrice,
+            text = "SHORT",
+            xloc = xloc.bar_time,
+            style = label.style_none,
+            textcolor = entryShortColor,
+            size = size.normal
+        )
 //------------------------- Inputs
 sl_enabled      = input.bool(true, "SL: Show Stop Loss", group="WE MODEL")
 sl_padTicks     = input.int(0,     "SL: Padding (ticks)", minval=0, group="WE MODEL")
@@ -721,8 +785,6 @@ sl_labelOffset  = input.int(0,     "SL: Label Vertical Offset (ticks)", minval=0
 
 pad      = sl_padTicks * syminfo.mintick
 lblPad   = sl_labelOffset * syminfo.mintick
-
-is1m = timeframe.isminutes and timeframe.multiplier == 1
 
 //------------------------- 2-candle swing detection (matches your definition)
 // Swing High: bullish candle then bearish candle -> swing high at HIGH of bullish candle (bar[1])
