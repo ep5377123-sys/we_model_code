@@ -926,6 +926,19 @@ if mnq_showMNQLabel and sl_enabled and is1m
 //==================================================================================================
 //============================== PANEL DE REGLAS (ESPAÑOL) =========================================
 //==================================================================================================
+//==================================================================================================
+//============================== SESSION STATUS ====================================================
+//==================================================================================================
+
+session1 = input.session("0300-0530", "Session 1", group="SESSION")
+session2 = input.session("0900-1130", "Session 2", group="SESSION")
+session3 = input.session("1330-1600", "Session 3", group="SESSION")
+
+inSession1 = not na(time(timeframe.period, session1))
+inSession2 = not na(time(timeframe.period, session2))
+inSession3 = not na(time(timeframe.period, session3))
+
+allowedSession = inSession1 or inSession2 or inSession3
 
 rules_enabled   = input.bool(true, "Mostrar reglas (ES)", group="REGLAS")
 rules_position  = input.string("top_right", "Posición", options=["top_left","top_right","bottom_left","bottom_right"], group="REGLAS")
@@ -938,7 +951,13 @@ panelPos = switch rules_position
 
 var table rulesTbl = table.new(panelPos, 1, 1, border_width=1)
 
+sessionStatus =
+     allowedSession
+     ? "🟢 SESION ACTIVA\n\n"
+     : "🔴 SESION CERRADA\n\n"
+
 rulesText = (
+    sessionStatus +
     "REGLAS (ES):\n" +
     "• OPERAR SOLO EN ESTOS HORARIOS:\n" +
     "  - 3:00 a 5:30 AM\n" +
@@ -947,7 +966,7 @@ rulesText = (
     "• Si el indicador da un LONG y luego da otro LONG más tarde mientras sigue subiendo, IGNÓRALO.\n" +
     "  (Igual para SHORT: si sale otro SHORT después y sigue bajando, IGNÓRALO.)\n" +
     "• NO break even.\n" +
-    "• Take Profit = 2R (2x lo arriesgado). Ej: si arriesgas $200, TP = $400."
+    "• Take Profit = 2R (2x lo arriesgado)."
 )
 if rules_enabled
     table.cell(
