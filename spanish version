@@ -963,6 +963,8 @@ rulesText = (
     "  - 3:00 a 5:30 AM\n" +
     "  - 9:00 a 11:30 AM\n" +
     "  - 1:30 a 4:00 PM\n" +
+    "• Máximo 3 operaciones por sesión.\n" +
+    "• Límite de pérdida diaria: $500.\n" +
     "• Si el indicador da un LONG y luego da otro LONG más tarde mientras sigue subiendo, IGNÓRALO.\n" +
     "  (Igual para SHORT: si sale otro SHORT después y sigue bajando, IGNÓRALO.)\n" +
     "• NO break even.\n" +
