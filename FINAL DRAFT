@@ -40,7 +40,18 @@ type IFVG_fvg
     int state = na
     array<IFVG_lab> labs = na
     int x_val = na
+    
+//----------------------- ONLY SHOW IFVGs THAT ACTUALLY PRODUCED A SIGNAL
+var IFVG_fvg[] ifvg_used_long_ary  = array.new<IFVG_fvg>()   // bullish IFVGs used for LONGS
+var IFVG_fvg[] ifvg_used_short_ary = array.new<IFVG_fvg>()   // bearish IFVGs used for SHORTS
 
+ifvg_trim_used(_ary) =>
+    while _ary.size() > ifvg_disp_num
+        _ary.shift()
+
+ifvg_push_used(_ary, _value) =>
+    _ary.push(_value)
+    ifvg_trim_used(_ary)
 //----------------------- IFVG Functions / State
 ifvg_buffer = 100
 ifvg_c_top = math.max(open, close)
@@ -109,6 +120,9 @@ var box[]   ifvg_boxes  = array.new_box()
 var line[]  ifvg_lines  = array.new_line()
 var label[] ifvg_labels = array.new_label()
 
+ifvg_tiny_width = input.int(3, "IFVG: Tiny Width (bars)", minval=1, maxval=20,
+     tooltip="How many 1m bars wide the displayed used IFVG should be.")
+
 ifvg_clear_drawings() =>
     if array.size(ifvg_boxes) > 0
         for b in ifvg_boxes
@@ -124,8 +138,14 @@ ifvg_clear_drawings() =>
         array.clear(ifvg_labels)
 
 // GREY + NOT EXTENDED FAR (only within the left->now range)
+// TINY IFVG DISPLAY (short, fixed width)
+// FULL IFVG DISPLAY:
+// - draw the original FVG from left -> xval
+// - draw only a small inversion stub from xval -> tiny_right
 ifvg_send_it(_ary) =>
-    last_index = _ary.size()-1
+    last_index = _ary.size() - 1
+    tiny_ms = ifvg_tiny_width * 60000  // 1m bars only
+
     for [index, value] in _ary
         bx_top  = value.top
         bx_bot  = value.bot
@@ -133,28 +153,32 @@ ifvg_send_it(_ary) =>
         xval    = value.x_val
         mid     = value.mid
 
-        // Force all IFVG boxes to grey
-        col   = color.new(ifvg_gray, 60)
-        o_col = color.new(ifvg_gray, 80)
+        tiny_right = xval + tiny_ms
+
+        // grey styling
+        col_left  = color.new(ifvg_gray, 78)
+        col_right = color.new(ifvg_gray, 86)
 
         if index > last_index - ifvg_disp_num
-            // Left segment (original)
-            b1 = box.new(bx_left, bx_top, xval, bx_bot, bgcolor=col, border_color=ifvg_invis, xloc=xloc.bar_time)
+            // 1) Original FVG portion
+            b1 = box.new(bx_left, bx_top, xval, bx_bot,
+                 bgcolor=col_left, border_color=ifvg_invis, xloc=xloc.bar_time)
             array.push(ifvg_boxes, b1)
 
-            // Right segment (inversion side) - ends at current time
-            b2 = box.new(xval, bx_top, time, bx_bot, bgcolor=o_col, border_color=ifvg_invis, xloc=xloc.bar_time)
+            // 2) Tiny inversion portion
+            b2 = box.new(xval, bx_top, tiny_right, bx_bot,
+                 bgcolor=col_right, border_color=ifvg_invis, xloc=xloc.bar_time)
             array.push(ifvg_boxes, b2)
 
-            // Midline only within left->now
-            ln = line.new(bx_left, mid, time, mid, color=ifvg_gray, style=line.style_dashed, xloc=xloc.bar_time)
+            // 3) Midline across the entire displayed IFVG
+            ln = line.new(bx_left, mid, tiny_right, mid,
+                 color=ifvg_gray, style=line.style_dashed, xloc=xloc.bar_time)
             array.push(ifvg_lines, ln)
 
             for stuff in value.labs
                 lb = ifvg_label_maker(stuff.x, stuff.y, stuff.dir)
                 if not na(lb)
                     array.push(ifvg_labels, lb)
-
 //----------------------- IFVG Arrays
 var IFVG_fvg[] ifvg_bull_fvg_ary = array.new<IFVG_fvg>()
 var IFVG_fvg[] ifvg_bear_fvg_ary = array.new<IFVG_fvg>()
@@ -166,6 +190,7 @@ var int  ifvg_prev_bull_inv_size = 0
 var int  ifvg_prev_bear_inv_size = 0
 var bool ifvg_bull_created = false
 var bool ifvg_bear_created = false
+
 
 //----------------------- IFVG Logic (1m only)
 if ifvg_only_1m
@@ -200,9 +225,8 @@ if ifvg_only_1m
     ifvg_bull_signal = ifvg_inv_manage(ifvg_bear_inv_ary)
 
     if barstate.islast
-        ifvg_send_it(ifvg_bull_inv_ary)
-        ifvg_send_it(ifvg_bear_inv_ary)
-
+        ifvg_send_it(ifvg_used_long_ary)
+        ifvg_send_it(ifvg_used_short_ary)
 // IFVG Alerts (Created)
 alertcondition(ifvg_bull_created, "Bullish IFVG Created", "Bullish IFVG CREATED")
 alertcondition(ifvg_bear_created, "Bearish IFVG Created", "Bearish IFVG CREATED")
@@ -685,8 +709,13 @@ we_short_setup = (
 )
 
 //------------------------- Debounce + Cooldown + 1-per-15m-candle
-we_long_edge  = we_long_setup  and not we_long_setup[1]
-we_short_edge = we_short_setup and not we_short_setup[1]
+both_setups   = we_long_setup and we_short_setup
+
+we_short_only = we_short_setup
+we_long_only  = we_long_setup and not we_short_setup
+
+we_long_edge  = we_long_only and not we_long_only[1]
+we_short_edge = we_short_only and not we_short_only[1]
 
 var int we_lastSignalBar = na
 we_inCooldown = not na(we_lastSignalBar) and (bar_index - we_lastSignalBar) <= we_cooldown_bars
@@ -702,6 +731,16 @@ if we_long_fire or we_short_fire
     we_lastSignalBar := bar_index
     we_last15SignalTime := we_t15
 
+    // LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
+    if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
+        usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
+        ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+
+    // SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
+    if we_short_fire and ifvg_bear_created and array.size(ifvg_bull_inv_ary) > 0
+        usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
+        ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
+
 //------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
 alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
@@ -711,7 +750,7 @@ alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
 //==================================================================================================
 
 entry_enabled     = input.bool(true, "ENTRY: Show Entry Line + Text", group="WE MODEL")
-entry_extendBars  = input.int(3,     "ENTRY: Extend (bars)", minval=1, maxval=50, group="WE MODEL")
+entry_extendBars  = input.int(7,     "ENTRY: Extend (bars)", minval=1, maxval=50, group="WE MODEL")
 
 // Colors
 entryLongColor  = color.blue
@@ -922,3 +961,103 @@ if mnq_showMNQLabel and sl_enabled and is1m
             textcolor = color.white,
             color = color.new(color.red, 0)
         )
+//----------------------------------------------------
+// INPUTS
+//----------------------------------------------------
+compSymbol         = input.symbol("CME_MINI:ES1!", "Comparison Symbol")
+showBullishSMT     = input.bool(true, "Show Bullish SMT")
+showBearishSMT     = input.bool(true, "Show Bearish SMT")
+showKeyLevelSMT    = input.bool(true, "Show Key Level SMT")
+deleteOld          = input.bool(false, "Delete Previous Drawings")
+
+pivotLen           = input.int(3, "Pivot Length", minval=1)
+
+//----------------------------------------------------
+// COMPARISON SYMBOL DATA
+//----------------------------------------------------
+compHigh = request.security(compSymbol, timeframe.period, high)
+compLow  = request.security(compSymbol, timeframe.period, low)
+
+//----------------------------------------------------
+// NORMAL PIVOT SMT SECTION
+//----------------------------------------------------
+ph  = ta.pivothigh(high, pivotLen, pivotLen)
+pl  = ta.pivotlow(low, pivotLen, pivotLen)
+cph = ta.pivothigh(compHigh, pivotLen, pivotLen)
+cpl = ta.pivotlow(compLow, pivotLen, pivotLen)
+
+var float lastMainHigh = na
+var float prevMainHigh = na
+var int   lastMainHighBar = na
+var int   prevMainHighBar = na
+
+var float lastCompHigh = na
+var float prevCompHigh = na
+
+var float lastMainLow = na
+var float prevMainLow = na
+var int   lastMainLowBar = na
+var int   prevMainLowBar = na
+
+var float lastCompLow = na
+var float prevCompLow = na
+
+if not na(ph)
+    prevMainHigh := lastMainHigh
+    prevMainHighBar := lastMainHighBar
+    lastMainHigh := ph
+    lastMainHighBar := bar_index - pivotLen
+
+if not na(cph)
+    prevCompHigh := lastCompHigh
+    lastCompHigh := cph
+
+if not na(pl)
+    prevMainLow := lastMainLow
+    prevMainLowBar := lastMainLowBar
+    lastMainLow := pl
+    lastMainLowBar := bar_index - pivotLen
+
+if not na(cpl)
+    prevCompLow := lastCompLow
+    lastCompLow := cpl
+
+//----------------------------------------------------
+// DRAWING STORAGE
+//----------------------------------------------------
+var line[] smtLines = array.new_line()
+var label[] smtLabels = array.new_label()
+
+f_clear_drawings() =>
+    if deleteOld
+        if array.size(smtLines) > 0
+            for i = array.size(smtLines) - 1 to 0
+                line.delete(array.get(smtLines, i))
+        if array.size(smtLabels) > 0
+            for i = array.size(smtLabels) - 1 to 0
+                label.delete(array.get(smtLabels, i))
+        array.clear(smtLines)
+        array.clear(smtLabels)
+
+//----------------------------------------------------
+// NORMAL SMT
+//----------------------------------------------------
+bearishSMT = showBearishSMT and not na(prevMainHigh) and not na(lastMainHigh) and not na(prevCompHigh) and not na(lastCompHigh) and
+     lastMainHigh > prevMainHigh and lastCompHigh <= prevCompHigh
+
+if bearishSMT and bar_index == lastMainHighBar + pivotLen
+    f_clear_drawings()
+    ln = line.new(prevMainHighBar, prevMainHigh, lastMainHighBar, lastMainHigh, color=color.red, width=2)
+    lb = label.new(lastMainHighBar, lastMainHigh, "SMT", style=label.style_label_down, textcolor=color.white, color=color.red, size=size.tiny)
+    array.push(smtLines, ln)
+    array.push(smtLabels, lb)
+
+bullishSMT = showBullishSMT and not na(prevMainLow) and not na(lastMainLow) and not na(prevCompLow) and not na(lastCompLow) and
+     lastMainLow < prevMainLow and lastCompLow >= prevCompLow
+
+if bullishSMT and bar_index == lastMainLowBar + pivotLen
+    f_clear_drawings()
+    ln = line.new(prevMainLowBar, prevMainLow, lastMainLowBar, lastMainLow, color=color.lime, width=2)
+    lb = label.new(lastMainLowBar, lastMainLow, "SMT", style=label.style_label_up, textcolor=color.black, color=color.lime, size=size.tiny)
+    array.push(smtLines, ln)
+    array.push(smtLabels, lb)
