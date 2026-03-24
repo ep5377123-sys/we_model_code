@@ -609,8 +609,7 @@ alertcondition(hl_lowMitigatedCount > hl_lowMitigatedCount[1],   "15m Low Mitiga
 
 //------------------------- Inputs
 we_recent_ms       = input.int(15, "WE MODEL: Valid window (minutes)", minval=1, group="WE MODEL") * 60 * 1000
-we_cooldown_bars   = input.int(10, "WE MODEL: Cooldown (bars)", minval=0, group="WE MODEL")
-we_onePer15mCandle = input.bool(true, "WE MODEL: Only 1 signal per 15m candle", group="WE MODEL")
+we_cooldown_bars   = input.int(5, "WE MODEL: Cooldown (bars)", minval=0, group="WE MODEL")
 
 //------------------------- Track last 1m FVG boundaries
 var float we_lastBearFvgTop_1m = na
@@ -632,39 +631,56 @@ if timeframe.isminutes and timeframe.multiplier == 1
     if we_fvg_up_1m
         we_lastBullFvgBot_1m := high[2]
 
-//------------------------- 15m FVG TAP (EVENT)
-we_fvg15_taps() =>
-    var float lastBullTop = na
-    var float lastBullBot = na
-    var int   lastBullT   = na
+//------------------------- 15m FVG TAP (LIVE ON 1m, NO WAITING FOR 15m CLOSE)
 
-    var float lastBearTop = na
-    var float lastBearBot = na
-    var int   lastBearT   = na
+// Store the most recent 15m bullish/bearish FVG zones
+var float we_lastBull15Top = na
+var float we_lastBull15Bot = na
+var int   we_lastBull15Time = na
 
-    bull15 = (low > high[2]) and (close[1] > high[2])
-    bear15 = (high < low[2]) and (close[1] < low[2])
+var float we_lastBear15Top = na
+var float we_lastBear15Bot = na
+var int   we_lastBear15Time = na
 
-    if bull15
-        lastBullTop := low
-        lastBullBot := high[2]
-        lastBullT   := time
+// Detect brand new 15m FVGs from completed 15m candles
+we_bull15_new = request.security(
+    syminfo.tickerid, "15",
+    (low > high[2]) and (close[1] > high[2]),
+    lookahead = barmerge.lookahead_off
+)
 
-    if bear15
-        lastBearTop := low[2]
-        lastBearBot := high
-        lastBearT   := time
+we_bear15_new = request.security(
+    syminfo.tickerid, "15",
+    (high < low[2]) and (close[1] < low[2]),
+    lookahead = barmerge.lookahead_off
+)
 
-    tapBull = not na(lastBullTop) and time > lastBullT and (low <= lastBullTop and high >= lastBullBot)
-    tapBear = not na(lastBearTop) and time > lastBearT and (low <= lastBearTop and high >= lastBearBot)
+we_bull15_top = request.security(syminfo.tickerid, "15", low,     lookahead = barmerge.lookahead_off)
+we_bull15_bot = request.security(syminfo.tickerid, "15", high[2], lookahead = barmerge.lookahead_off)
 
-    tapBullEvent = tapBull and not tapBull[1]
-    tapBearEvent = tapBear and not tapBear[1]
+we_bear15_top = request.security(syminfo.tickerid, "15", low[2],  lookahead = barmerge.lookahead_off)
+we_bear15_bot = request.security(syminfo.tickerid, "15", high,    lookahead = barmerge.lookahead_off)
 
-    [tapBullEvent, tapBearEvent]
+we_fvg15_time = request.security(syminfo.tickerid, "15", time,    lookahead = barmerge.lookahead_off)
 
-[we_tapBullFvg_15m, we_tapBearFvg_15m] = request.security(syminfo.tickerid, "15", we_fvg15_taps(), lookahead=barmerge.lookahead_off)
+// Update the most recent stored 15m FVG zones
+if we_bull15_new
+    we_lastBull15Top  := we_bull15_top
+    we_lastBull15Bot  := we_bull15_bot
+    we_lastBull15Time := we_fvg15_time
 
+if we_bear15_new
+    we_lastBear15Top  := we_bear15_top
+    we_lastBear15Bot  := we_bear15_bot
+    we_lastBear15Time := we_fvg15_time
+
+// LIVE 1m tap detection into the stored 15m FVG zones
+we_tapBullFvg_15m_live = not na(we_lastBull15Top) and not na(we_lastBull15Bot) and time > we_lastBull15Time and (low <= we_lastBull15Top and high >= we_lastBull15Bot)
+we_tapBearFvg_15m_live = not na(we_lastBear15Top) and not na(we_lastBear15Bot) and time > we_lastBear15Time and (low <= we_lastBear15Top and high >= we_lastBear15Bot)
+
+// Fire only on first 1m entry into the zone
+we_tapBullFvg_15m = we_tapBullFvg_15m_live and not we_tapBullFvg_15m_live[1]
+we_tapBearFvg_15m = we_tapBearFvg_15m_live and not we_tapBearFvg_15m_live[1]
 //------------------------- 15m sweep event (from HL module)
 we_sweepLow_15m  = hl_lowMitigatedCount  > hl_lowMitigatedCount[1]
 we_sweepHigh_15m = hl_highMitigatedCount > hl_highMitigatedCount[1]
@@ -720,16 +736,12 @@ we_short_edge = we_short_only and not we_short_only[1]
 var int we_lastSignalBar = na
 we_inCooldown = not na(we_lastSignalBar) and (bar_index - we_lastSignalBar) <= we_cooldown_bars
 
-we_t15 = time("15")
-var int we_last15SignalTime = na
-we_blockBy15m = we_onePer15mCandle and (we_last15SignalTime == we_t15)
-
-we_long_fire  = we_long_edge  and not we_inCooldown and not we_blockBy15m
-we_short_fire = we_short_edge and not we_inCooldown and not we_blockBy15m
+we_long_fire  = we_long_edge  and not we_inCooldown 
+we_short_fire = we_short_edge and not we_inCooldown 
 
 if we_long_fire or we_short_fire
     we_lastSignalBar := bar_index
-    we_last15SignalTime := we_t15
+
 
     // LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
     if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
