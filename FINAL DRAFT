@@ -702,22 +702,23 @@ we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime
 we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
 //------------------------- IFVG trigger bar (1m only)
-we_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and (ifvg_bull_created or ifvg_bear_created)
+we_bull_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and ifvg_bull_created
+we_bear_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and ifvg_bear_created
 
-we_close_above_bear_fvg = we_ifvg_bar and not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
-we_close_below_bull_fvg = we_ifvg_bar and not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
+we_close_above_bear_fvg = we_bull_ifvg_bar and not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
+we_close_below_bull_fvg = we_bear_ifvg_bar and not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
 
 //------------------------- Final WE MODEL rules (anchored to IFVG bar)
 we_long_setup = (
-    we_ifvg_bar and
+    we_bull_ifvg_bar and
     (
-        (we_recentSweepLow  and we_close_above_bear_fvg) or
-        (we_recentTapBull   and we_close_above_bear_fvg)
+        (we_recentSweepLow and we_close_above_bear_fvg) or
+        (we_recentTapBull  and we_close_above_bear_fvg)
     )
 )
 
 we_short_setup = (
-    we_ifvg_bar and
+    we_bear_ifvg_bar and
     (
         (we_recentSweepHigh and we_close_below_bull_fvg) or
         (we_recentTapBear   and we_close_below_bull_fvg)
