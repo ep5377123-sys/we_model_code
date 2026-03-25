@@ -621,14 +621,6 @@ var int we_lastSweepHighTime = na
 var int we_lastTapBullTime   = na
 var int we_lastTapBearTime   = na
 
-//------------------------- Persistent arm/disarm state
-var bool we_long_armed  = false
-var bool we_short_armed = false
-
-// optional: remember exact arming event time
-var int we_long_arm_time  = na
-var int we_short_arm_time = na
-
 //------------------------- 1m FVG tracking
 we_fvg_up_1m   = (low > high[2]) and (close[1] > high[2])
 we_fvg_down_1m = (high < low[2]) and (close[1] < low[2])
@@ -640,14 +632,17 @@ if timeframe.isminutes and timeframe.multiplier == 1
         we_lastBullFvgBot_1m := high[2]
 
 //------------------------- 15m FVG TAP (LIVE ON 1m, NO WAITING FOR 15m CLOSE)
-var float we_lastBull15Top  = na
-var float we_lastBull15Bot  = na
+
+// Store the most recent 15m bullish/bearish FVG zones
+var float we_lastBull15Top = na
+var float we_lastBull15Bot = na
 var int   we_lastBull15Time = na
 
-var float we_lastBear15Top  = na
-var float we_lastBear15Bot  = na
+var float we_lastBear15Top = na
+var float we_lastBear15Bot = na
 var int   we_lastBear15Time = na
 
+// Detect brand new 15m FVGs from completed 15m candles
 we_bull15_new = request.security(
     syminfo.tickerid, "15",
     (low > high[2]) and (close[1] > high[2]),
@@ -668,6 +663,7 @@ we_bear15_bot = request.security(syminfo.tickerid, "15", high,    lookahead = ba
 
 we_fvg15_time = request.security(syminfo.tickerid, "15", time,    lookahead = barmerge.lookahead_off)
 
+// Update the most recent stored 15m FVG zones
 if we_bull15_new
     we_lastBull15Top  := we_bull15_top
     we_lastBull15Bot  := we_bull15_bot
@@ -678,57 +674,69 @@ if we_bear15_new
     we_lastBear15Bot  := we_bear15_bot
     we_lastBear15Time := we_fvg15_time
 
+// LIVE 1m tap detection into the stored 15m FVG zones
 we_tapBullFvg_15m_live = not na(we_lastBull15Top) and not na(we_lastBull15Bot) and time > we_lastBull15Time and (low <= we_lastBull15Top and high >= we_lastBull15Bot)
 we_tapBearFvg_15m_live = not na(we_lastBear15Top) and not na(we_lastBear15Bot) and time > we_lastBear15Time and (low <= we_lastBear15Top and high >= we_lastBear15Bot)
 
+// Fire only on first 1m entry into the zone
 we_tapBullFvg_15m = we_tapBullFvg_15m_live and not we_tapBullFvg_15m_live[1]
 we_tapBearFvg_15m = we_tapBearFvg_15m_live and not we_tapBearFvg_15m_live[1]
-
-//------------------------- 15m sweep event
+//------------------------- 15m sweep event (from HL module)
 we_sweepLow_15m  = hl_lowMitigatedCount  > hl_lowMitigatedCount[1]
 we_sweepHigh_15m = hl_highMitigatedCount > hl_highMitigatedCount[1]
 
-//------------------------- Arm only on fresh key level events
+var int we_long_setup_counter  = 0
+var int we_short_setup_counter = 0
+
+//------------------------- Update timestamps
 if we_sweepLow_15m
     we_lastSweepLowTime := time
-    we_long_armed := true
-    we_long_arm_time := time
-
-if we_tapBullFvg_15m
-    we_lastTapBullTime := time
-    we_long_armed := true
-    we_long_arm_time := time
-
+    we_long_setup_counter += 1
 if we_sweepHigh_15m
     we_lastSweepHighTime := time
-    we_short_armed := true
-    we_short_arm_time := time
-
+    we_short_setup_counter += 1
+if we_tapBullFvg_15m
+    we_lastTapBullTime := time
+    we_long_setup_counter += 1
 if we_tapBearFvg_15m
     we_lastTapBearTime := time
-    we_short_armed := true
-    we_short_arm_time := time
+    we_short_setup_counter += 1
 
-//------------------------- Expire old armed states
-if we_long_armed and not na(we_long_arm_time) and (time - we_long_arm_time > we_recent_ms)
-    we_long_armed := false
+//------------------------- Recent checks
+we_recentSweepLow  = not na(we_lastSweepLowTime)  and (time - we_lastSweepLowTime)  <= we_recent_ms
+we_recentSweepHigh = not na(we_lastSweepHighTime) and (time - we_lastSweepHighTime) <= we_recent_ms
+we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime)   <= we_recent_ms
+we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
-if we_short_armed and not na(we_short_arm_time) and (time - we_short_arm_time > we_recent_ms)
-    we_short_armed := false
+//------------------------- IFVG trigger bar (1m only)
+we_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and (ifvg_bull_created or ifvg_bear_created)
 
-//------------------------- Direction-specific IFVG creation only
-we_bull_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and ifvg_bull_created
-we_bear_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and ifvg_bear_created
+we_close_above_bear_fvg = we_ifvg_bar and not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
+we_close_below_bull_fvg = we_ifvg_bar and not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
 
-we_close_above_bear_fvg = we_bull_ifvg_bar and not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
-we_close_below_bull_fvg = we_bear_ifvg_bar and not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
+//------------------------- Final WE MODEL rules (anchored to IFVG bar)
+we_long_setup = (
+    we_ifvg_bar and
+    (
+        (we_recentSweepLow  and we_close_above_bear_fvg) or
+        (we_recentTapBull   and we_close_above_bear_fvg) and
+        we_long_setup_counter == 1
+    )
+)
 
-//------------------------- Final setup rules
-we_long_setup  = we_long_armed  and we_bull_ifvg_bar and we_close_above_bear_fvg
-we_short_setup = we_short_armed and we_bear_ifvg_bar and we_close_below_bull_fvg
+we_short_setup = (
+    we_ifvg_bar and
+    (
+        (we_recentSweepHigh and we_close_below_bull_fvg) or
+        (we_recentTapBear   and we_close_below_bull_fvg) and
+        we_short_setup_counter == 1
+    )
+)
 
-//------------------------- Prevent both directions same bar
-we_short_only = we_short_setup and not we_long_setup
+//------------------------- Debounce + Cooldown + 1-per-15m-candle
+both_setups   = we_long_setup and we_short_setup
+
+we_short_only = we_short_setup
 we_long_only  = we_long_setup and not we_short_setup
 
 we_long_edge  = we_long_only and not we_long_only[1]
@@ -737,32 +745,29 @@ we_short_edge = we_short_only and not we_short_only[1]
 var int we_lastSignalBar = na
 we_inCooldown = not na(we_lastSignalBar) and (bar_index - we_lastSignalBar) <= we_cooldown_bars
 
-we_long_fire  = we_long_edge  and not we_inCooldown
-we_short_fire = we_short_edge and not we_inCooldown
+we_long_fire  = we_long_edge  and not we_inCooldown 
+we_short_fire = we_short_edge and not we_inCooldown 
 
 if we_long_fire or we_short_fire
     we_lastSignalBar := bar_index
 
-if we_long_fire
-    we_long_armed := false
-    we_long_arm_time := na
 
-if we_short_fire
-    we_short_armed := false
-    we_short_arm_time := na
+    // LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
+    if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
+        usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
+        ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+        we_long_setup_counter -= 1
 
-//------------------------- Store used IFVGs
-if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
-    usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+    // SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
+    if we_short_fire and ifvg_bear_created and array.size(ifvg_bull_inv_ary) > 0
+        usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
+        ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
+        we_short_setup_counter -= 1
 
-if we_short_fire and ifvg_bear_created and array.size(ifvg_bull_inv_ary) > 0
-    usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
-
-//------------------------- Alerts
+//------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
 alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
+
 //==================================================================================================
 //====================== WE MODEL: ENTRY LINE + LONG/SHORT TEXT (VISIBLE) =========================
 //==================================================================================================
