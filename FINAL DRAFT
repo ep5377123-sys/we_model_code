@@ -984,3 +984,241 @@ if mnq_showMNQLabel and sl_enabled and is1m
             textcolor = color.white,
             color = color.new(color.red, 0)
         )
+//==================================================================================================
+//=========================== OPENING PRICES (WE MODEL) ============================================
+//==================================================================================================
+
+// Midnight Open (00:00)
+var float midnightOpen = na
+if hour == 0 and minute == 0
+    midnightOpen := open
+
+// Weekly Open (Sunday 18:00 futures open)
+var float weeklyOpen = na
+if dayofweek == dayofweek.sunday and hour == 18 and minute == 0
+    weeklyOpen := open
+
+// 8:30 Open
+var float open830 = na
+if hour == 8 and minute == 30
+    open830 := open
+
+// 9:30 Open
+var float open930 = na
+if hour == 9 and minute == 30
+    open930 := open
+
+//==================================================================================================
+//==================================== REAL-TIME SMT DETECTOR =====================================
+//==================================================================================================
+
+smt_enabled      = input.bool(true, "SMT: Enable", group="SMT")
+smt_compare_sym  = input.symbol("CME_MINI:ES1!", "SMT: Compare Symbol", group="SMT")
+smt_pivotLen     = input.int(3, "SMT: Pivot Length", minval=1, group="SMT")
+smt_show_labels  = input.bool(true, "SMT: Show Labels", group="SMT")
+
+//------------------------- Get comparison symbol data
+smt_comp_high = request.security(smt_compare_sym, timeframe.period, high, lookahead=barmerge.lookahead_off)
+smt_comp_low  = request.security(smt_compare_sym, timeframe.period, low,  lookahead=barmerge.lookahead_off)
+
+//------------------------- Pivot highs/lows for chart symbol
+chart_piv_hi = ta.pivothigh(high, smt_pivotLen, smt_pivotLen)
+chart_piv_lo = ta.pivotlow(low, smt_pivotLen, smt_pivotLen)
+
+//------------------------- Pivot highs/lows for comparison symbol
+comp_piv_hi = ta.pivothigh(smt_comp_high, smt_pivotLen, smt_pivotLen)
+comp_piv_lo = ta.pivotlow(smt_comp_low, smt_pivotLen, smt_pivotLen)
+
+//------------------------- Store last two pivot highs/lows for chart symbol
+var float chart_last_hi = na
+var float chart_prev_hi = na
+var float chart_last_lo = na
+var float chart_prev_lo = na
+
+var int chart_last_hi_time = na
+var int chart_last_lo_time = na
+
+if not na(chart_piv_hi)
+    chart_prev_hi := chart_last_hi
+    chart_last_hi := chart_piv_hi
+    chart_last_hi_time := time[smt_pivotLen]
+
+if not na(chart_piv_lo)
+    chart_prev_lo := chart_last_lo
+    chart_last_lo := chart_piv_lo
+    chart_last_lo_time := time[smt_pivotLen]
+
+//------------------------- Store last two pivot highs/lows for comparison symbol
+var float comp_last_hi = na
+var float comp_prev_hi = na
+var float comp_last_lo = na
+var float comp_prev_lo = na
+
+if not na(comp_piv_hi)
+    comp_prev_hi := comp_last_hi
+    comp_last_hi := comp_piv_hi
+
+if not na(comp_piv_lo)
+    comp_prev_lo := comp_last_lo
+    comp_last_lo := comp_piv_lo
+
+//------------------------- SMT conditions
+// Bearish SMT:
+// chart makes a higher high, comparison symbol does NOT make a higher high
+bearishSMT = smt_enabled and
+     not na(chart_last_hi) and not na(chart_prev_hi) and
+     not na(comp_last_hi)  and not na(comp_prev_hi) and
+     chart_last_hi > chart_prev_hi and
+     comp_last_hi <= comp_prev_hi
+
+// Bullish SMT:
+// chart makes a lower low, comparison symbol does NOT make a lower low
+bullishSMT = smt_enabled and
+     not na(chart_last_lo) and not na(chart_prev_lo) and
+     not na(comp_last_lo)  and not na(comp_prev_lo) and
+     chart_last_lo < chart_prev_lo and
+     comp_last_lo >= comp_prev_lo
+
+//------------------------- Fire only once when newly detected
+bullishSMT_now = bullishSMT and not bullishSMT[1]
+bearishSMT_now = bearishSMT and not bearishSMT[1]
+
+//------------------------- Optional labels
+if smt_show_labels
+    if bullishSMT_now
+        label.new(
+            x = time,
+            y = low,
+            xloc = xloc.bar_time,
+            text = "Bull SMT",
+            style = label.style_label_up,
+            color = color.new(color.blue, 0),
+            textcolor = color.white,
+            size = size.tiny
+        )
+
+    if bearishSMT_now
+        label.new(
+            x = time,
+            y = high,
+            xloc = xloc.bar_time,
+            text = "Bear SMT",
+            style = label.style_label_down,
+            color = color.new(color.red, 0),
+            textcolor = color.white,
+            size = size.tiny
+        )
+
+//------------------------- Alerts
+alertcondition(bullishSMT_now, "Bullish SMT", "Bullish SMT detected")
+alertcondition(bearishSMT_now, "Bearish SMT", "Bearish SMT detected")
+//==================================================================================================
+//=========================== WE MODEL GRADE TOOLTIP ===============================================
+//==================================================================================================
+
+// Turn on/off
+grade_show_tooltip = input.bool(true, "GRADE: Show Hover Tooltip", group="WE MODEL GRADE")
+
+//------------------------- Helpers
+we_count_above_opens(_price) =>
+    int cnt = 0
+    cnt += not na(midnightOpen) and _price > midnightOpen ? 1 : 0
+    cnt += not na(weeklyOpen)   and _price > weeklyOpen   ? 1 : 0
+    cnt += not na(open830)      and _price > open830      ? 1 : 0
+    cnt += not na(open930)      and _price > open930      ? 1 : 0
+    cnt
+
+we_count_below_opens(_price) =>
+    int cnt = 0
+    cnt += not na(midnightOpen) and _price < midnightOpen ? 1 : 0
+    cnt += not na(weeklyOpen)   and _price < weeklyOpen   ? 1 : 0
+    cnt += not na(open830)      and _price < open830      ? 1 : 0
+    cnt += not na(open930)      and _price < open930      ? 1 : 0
+    cnt
+
+// Replace these with your real SMT booleans from your SMT module
+grade_bullishSMT = bullishSMT_now
+grade_bearishSMT = bearishSMT_now
+
+we_long_grade(_price, _bullishSMT_now) =>
+    belowCount = we_count_below_opens(_price)
+    string grade = "C"
+    if belowCount >= 2
+        grade := _bullishSMT_now ? "A+" : "A"
+    else if belowCount >= 1
+        grade := _bullishSMT_now ? "B+" : "B"
+    else
+        grade := _bullishSMT_now ? "C+" : "C"
+    grade
+
+we_short_grade(_price, _bearishSMT_now) =>
+    aboveCount = we_count_above_opens(_price)
+    string grade = "C"
+    if aboveCount >= 2
+        grade := _bearishSMT_now ? "A+" : "A"
+    else if aboveCount >= 1
+        grade := _bearishSMT_now ? "B+" : "B"
+    else
+        grade := _bearishSMT_now ? "C+" : "C"
+    grade
+
+we_long_tooltip(_price, _bullishSMT_now) =>
+    belowCount = we_count_below_opens(_price)
+    grade = we_long_grade(_price, _bullishSMT_now)
+
+    (
+        "Grade: " + grade + "\n" +
+        "✓ IFVG\n" +
+        "✓ Key Level\n" +
+        "Openings below price: " + str.tostring(belowCount) + "/4\n" +
+        "Bullish SMT: " + (_bullishSMT_now ? "Yes" : "No") + "\n" +
+        "Session: NY AM"
+    )
+
+we_short_tooltip(_price, _bearishSMT_now) =>
+    aboveCount = we_count_above_opens(_price)
+    grade = we_short_grade(_price, _bearishSMT_now)
+
+    (
+        "Grade: " + grade + "\n" +
+        "✓ IFVG\n" +
+        "✓ Key Level\n" +
+        "Openings above price: " + str.tostring(aboveCount) + "/4\n" +
+        "Bearish SMT: " + (_bearishSMT_now ? "Yes" : "No") + "\n" +
+        "Session: NY AM"
+    )
+
+//------------------------- Draw hoverable marker labels
+if grade_show_tooltip and is1m
+
+    offsetX = entry_extendBars * barMs   // SAME offset as LONG/SHORT text
+
+    if we_long_fire
+        longTip = we_long_tooltip(close, bullishSMT_now)
+
+        label.new(
+            x = time + offsetX + (2 * barMs),   // push slightly MORE right than "LONG"
+            y = close,
+            xloc = xloc.bar_time,
+            text = "●",
+            style = label.style_label_center,   // IMPORTANT (makes it easier to hover)
+            textcolor = color.blue,
+            color = color.new(color.blue, 80),  // faint background = bigger hitbox
+            size = size.large,                  // 🔥 BIGGER
+            tooltip = longTip
+        )
+
+    if we_short_fire
+        shortTip = we_short_tooltip(close, bearishSMT_now)
+
+        label.new(
+            x = time + offsetX + (2 * barMs),
+            y = close,
+            xloc = xloc.bar_time,
+            text = "●",
+            style = label.style_label_center,
+            textcolor = color.red,
+            color = color.new(color.red, 80),
+            size = size.large,
+            tooltip = shortTip
+        )
