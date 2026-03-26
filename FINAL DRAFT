@@ -1009,109 +1009,150 @@ if hour == 9 and minute == 30
     open930 := open
 
 //==================================================================================================
-//==================================== REAL-TIME SMT DETECTOR =====================================
+//====================================== SMT MODULE ================================================
 //==================================================================================================
 
-smt_enabled      = input.bool(true, "SMT: Enable", group="SMT")
-smt_compare_sym  = input.symbol("CME_MINI:ES1!", "SMT: Compare Symbol", group="SMT")
-smt_pivotLen     = input.int(3, "SMT: Pivot Length", minval=1, group="SMT")
-smt_show_labels  = input.bool(true, "SMT: Show Labels", group="SMT")
+//----------------------------------------------------
+// INPUTS
+//----------------------------------------------------
+compSymbol         = input.symbol("CME_MINI:ES1!", "Comparison Symbol", group="SMT")
+showBullishSMT     = input.bool(true, "Show Bullish SMT", group="SMT")
+showBearishSMT     = input.bool(true, "Show Bearish SMT", group="SMT")
+deleteOld          = input.bool(false, "Delete Previous Drawings", group="SMT")
+pivotLen           = input.int(3, "Pivot Length", minval=1, group="SMT")
 
-//------------------------- Get comparison symbol data
-smt_comp_high = request.security(smt_compare_sym, timeframe.period, high, lookahead=barmerge.lookahead_off)
-smt_comp_low  = request.security(smt_compare_sym, timeframe.period, low,  lookahead=barmerge.lookahead_off)
+//----------------------------------------------------
+// COMPARISON SYMBOL DATA
+//----------------------------------------------------
+compHigh = request.security(compSymbol, timeframe.period, high)
+compLow  = request.security(compSymbol, timeframe.period, low)
 
-//------------------------- Pivot highs/lows for chart symbol
-chart_piv_hi = ta.pivothigh(high, smt_pivotLen, smt_pivotLen)
-chart_piv_lo = ta.pivotlow(low, smt_pivotLen, smt_pivotLen)
+//----------------------------------------------------
+// NORMAL PIVOT SMT SECTION
+//----------------------------------------------------
+ph  = ta.pivothigh(high, pivotLen, pivotLen)
+pl  = ta.pivotlow(low, pivotLen, pivotLen)
+cph = ta.pivothigh(compHigh, pivotLen, pivotLen)
+cpl = ta.pivotlow(compLow, pivotLen, pivotLen)
 
-//------------------------- Pivot highs/lows for comparison symbol
-comp_piv_hi = ta.pivothigh(smt_comp_high, smt_pivotLen, smt_pivotLen)
-comp_piv_lo = ta.pivotlow(smt_comp_low, smt_pivotLen, smt_pivotLen)
+var float lastMainHigh    = na
+var float prevMainHigh    = na
+var int   lastMainHighBar = na
+var int   prevMainHighBar = na
 
-//------------------------- Store last two pivot highs/lows for chart symbol
-var float chart_last_hi = na
-var float chart_prev_hi = na
-var float chart_last_lo = na
-var float chart_prev_lo = na
+var float lastCompHigh = na
+var float prevCompHigh = na
 
-var int chart_last_hi_time = na
-var int chart_last_lo_time = na
+var float lastMainLow    = na
+var float prevMainLow    = na
+var int   lastMainLowBar = na
+var int   prevMainLowBar = na
 
-if not na(chart_piv_hi)
-    chart_prev_hi := chart_last_hi
-    chart_last_hi := chart_piv_hi
-    chart_last_hi_time := time[smt_pivotLen]
+var float lastCompLow = na
+var float prevCompLow = na
 
-if not na(chart_piv_lo)
-    chart_prev_lo := chart_last_lo
-    chart_last_lo := chart_piv_lo
-    chart_last_lo_time := time[smt_pivotLen]
+if not na(ph)
+    prevMainHigh    := lastMainHigh
+    prevMainHighBar := lastMainHighBar
+    lastMainHigh    := ph
+    lastMainHighBar := bar_index - pivotLen
 
-//------------------------- Store last two pivot highs/lows for comparison symbol
-var float comp_last_hi = na
-var float comp_prev_hi = na
-var float comp_last_lo = na
-var float comp_prev_lo = na
+if not na(cph)
+    prevCompHigh := lastCompHigh
+    lastCompHigh := cph
 
-if not na(comp_piv_hi)
-    comp_prev_hi := comp_last_hi
-    comp_last_hi := comp_piv_hi
+if not na(pl)
+    prevMainLow    := lastMainLow
+    prevMainLowBar := lastMainLowBar
+    lastMainLow    := pl
+    lastMainLowBar := bar_index - pivotLen
 
-if not na(comp_piv_lo)
-    comp_prev_lo := comp_last_lo
-    comp_last_lo := comp_piv_lo
+if not na(cpl)
+    prevCompLow := lastCompLow
+    lastCompLow := cpl
 
-//------------------------- SMT conditions
-// Bearish SMT:
-// chart makes a higher high, comparison symbol does NOT make a higher high
-bearishSMT = smt_enabled and
-     not na(chart_last_hi) and not na(chart_prev_hi) and
-     not na(comp_last_hi)  and not na(comp_prev_hi) and
-     chart_last_hi > chart_prev_hi and
-     comp_last_hi <= comp_prev_hi
+//----------------------------------------------------
+// DRAWING STORAGE
+//----------------------------------------------------
+var line[]  smtLines  = array.new_line()
+var label[] smtLabels = array.new_label()
 
-// Bullish SMT:
-// chart makes a lower low, comparison symbol does NOT make a lower low
-bullishSMT = smt_enabled and
-     not na(chart_last_lo) and not na(chart_prev_lo) and
-     not na(comp_last_lo)  and not na(comp_prev_lo) and
-     chart_last_lo < chart_prev_lo and
-     comp_last_lo >= comp_prev_lo
+f_clear_drawings() =>
+    if deleteOld
+        if array.size(smtLines) > 0
+            for i = array.size(smtLines) - 1 to 0
+                line.delete(array.get(smtLines, i))
+        if array.size(smtLabels) > 0
+            for i = array.size(smtLabels) - 1 to 0
+                label.delete(array.get(smtLabels, i))
+        array.clear(smtLines)
+        array.clear(smtLabels)
 
-//------------------------- Fire only once when newly detected
-bullishSMT_now = bullishSMT and not bullishSMT[1]
-bearishSMT_now = bearishSMT and not bearishSMT[1]
+//----------------------------------------------------
+// NORMAL SMT CONDITIONS
+//----------------------------------------------------
+bearishSMT = showBearishSMT and
+     not na(prevMainHigh) and not na(lastMainHigh) and
+     not na(prevCompHigh) and not na(lastCompHigh) and
+     lastMainHigh > prevMainHigh and
+     lastCompHigh <= prevCompHigh
 
-//------------------------- Optional labels
-if smt_show_labels
-    if bullishSMT_now
-        label.new(
-            x = time,
-            y = low,
-            xloc = xloc.bar_time,
-            text = "Bull SMT",
-            style = label.style_label_up,
-            color = color.new(color.blue, 0),
-            textcolor = color.white,
-            size = size.tiny
-        )
+bullishSMT = showBullishSMT and
+     not na(prevMainLow) and not na(lastMainLow) and
+     not na(prevCompLow) and not na(lastCompLow) and
+     lastMainLow < prevMainLow and
+     lastCompLow >= prevCompLow
 
-    if bearishSMT_now
-        label.new(
-            x = time,
-            y = high,
-            xloc = xloc.bar_time,
-            text = "Bear SMT",
-            style = label.style_label_down,
-            color = color.new(color.red, 0),
-            textcolor = color.white,
-            size = size.tiny
-        )
+//----------------------------------------------------
+// FIRE ONLY ON CONFIRMED PIVOT BAR
+//----------------------------------------------------
+bearishSMT_now = bearishSMT and bar_index == lastMainHighBar + pivotLen
+bullishSMT_now = bullishSMT and bar_index == lastMainLowBar + pivotLen
 
-//------------------------- Alerts
-alertcondition(bullishSMT_now, "Bullish SMT", "Bullish SMT detected")
-alertcondition(bearishSMT_now, "Bearish SMT", "Bearish SMT detected")
+if bearishSMT_now
+    f_clear_drawings()
+    ln = line.new(
+        x1 = prevMainHighBar,
+        y1 = prevMainHigh,
+        x2 = lastMainHighBar,
+        y2 = lastMainHigh,
+        color = color.red,
+        width = 2
+    )
+    lb = label.new(
+        x = lastMainHighBar,
+        y = lastMainHigh,
+        text = "SMT",
+        style = label.style_label_down,
+        textcolor = color.white,
+        color = color.red,
+        size = size.tiny
+    )
+    array.push(smtLines, ln)
+    array.push(smtLabels, lb)
+
+if bullishSMT_now
+    f_clear_drawings()
+    ln = line.new(
+        x1 = prevMainLowBar,
+        y1 = prevMainLow,
+        x2 = lastMainLowBar,
+        y2 = lastMainLow,
+        color = color.lime,
+        width = 2
+    )
+    lb = label.new(
+        x = lastMainLowBar,
+        y = lastMainLow,
+        text = "SMT",
+        style = label.style_label_up,
+        textcolor = color.black,
+        color = color.lime,
+        size = size.tiny
+    )
+    array.push(smtLines, ln)
+    array.push(smtLabels, lb)
+
 //==================================================================================================
 //=========================== WE MODEL GRADE TOOLTIP ===============================================
 //==================================================================================================
