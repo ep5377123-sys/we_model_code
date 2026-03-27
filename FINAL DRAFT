@@ -987,27 +987,60 @@ if mnq_showMNQLabel and sl_enabled and is1m
 //==================================================================================================
 //=========================== OPENING PRICES (WE MODEL) ============================================
 //==================================================================================================
+var float dailyMidnightOpen = na
+var float open830           = na
+var float open930           = na
+var float open1330          = na
 
-// Midnight Open (00:00)
-var float midnightOpen = na
-if hour == 0 and minute == 0
-    midnightOpen := open
+//----------------------------------------------------
+// DAILY RESET FOR OPENING PRICES
+//----------------------------------------------------
+nyHour   = hour(time, "America/New_York")
+nyMinute = minute(time, "America/New_York")
+newDay   = ta.change(time("D", "America/New_York")) != 0
+curMins  = nyHour * 60 + nyMinute
 
-// Weekly Open (Sunday 18:00 futures open)
-var float weeklyOpen = na
-if dayofweek == dayofweek.sunday and hour == 18 and minute == 0
-    weeklyOpen := open
+if newDay
+    dailyMidnightOpen := na
+    open830 := na
+    open930 := na
+    open1330 := na
 
-// 8:30 Open
-var float open830 = na
-if hour == 8 and minute == 30
+if nyHour == 0 and nyMinute == 0
+    dailyMidnightOpen := open
+
+if nyHour == 8 and nyMinute == 30
     open830 := open
 
-// 9:30 Open
-var float open930 = na
-if hour == 9 and minute == 30
+if nyHour == 9 and nyMinute == 30
     open930 := open
 
+if nyHour == 13 and nyMinute == 30
+    open1330 := open
+
+isAsia         = curMins >= 18 * 60 or curMins <= 1 * 60 + 59
+isLondon       = curMins >= 2 * 60  and curMins <= 5 * 60 + 59
+isNyOpen       = curMins >= 6 * 60  and curMins <= 8 * 60 + 29
+isNyPremarket  = curMins >= 8 * 60 + 30 and curMins <= 9 * 60 + 29
+isNyAM         = curMins >= 9 * 60 + 30 and curMins <= 11 * 60 + 29
+isLunch        = curMins >= 11 * 60 + 30 and curMins <= 13 * 60 + 29
+isNyPM         = curMins >= 13 * 60 + 30 and curMins <= 14 * 60 + 59
+isFinalHour    = curMins >= 15 * 60 and curMins <= 16 * 60
+//----------------------------------------------------
+// ONLY CHECK TODAY'S OPENING PRICES
+//----------------------------------------------------
+aboveTodayOpens = (
+    (na(dailyMidnightOpen) or close > dailyMidnightOpen) and
+    (na(open830) or close > open830) and
+    (na(open930) or close > open930) and
+    (na(open1330) or close > open1330)
+)
+belowTodayOpens = (
+    (na(dailyMidnightOpen) or close < dailyMidnightOpen) and
+    (na(open830) or close < open830) and
+    (na(open930) or close < open930) and
+    (na(open1330) or close < open1330)
+)
 //==================================================================================================
 //====================================== SMT MODULE ================================================
 //==================================================================================================
@@ -1159,24 +1192,49 @@ if bullishSMT_now
 
 // Turn on/off
 grade_show_tooltip = input.bool(true, "GRADE: Show Hover Tooltip", group="WE MODEL GRADE")
+//----------------------------------------------------
+// SESSION DETECTION
+//----------------------------------------------------
 
-//------------------------- Helpers
+
+
+sessionName =
+     isAsia        ? "ASIA" :
+     isLondon      ? "LONDON" :
+     isNyOpen      ? "NY OPEN" :
+     isNyPremarket ? "NY PRE MARKET" :
+     isNyAM        ? "NY AM" :
+     isLunch       ? "SHITTY LUNCH" :
+     isNyPM        ? "NY PM" :
+     isFinalHour   ? "FINAL HOUR MACRO" :
+     "OFF SESSION"
+
+sessionIcon =
+     isAsia        ? "🌙" :
+     isLondon      ? "🇬🇧" :
+     isNyOpen      ? "🔔" :
+     isNyPremarket ? "📈" :
+     isNyAM        ? "🗽" :
+     isLunch       ? "🍔" :
+     isNyPM        ? "⚡" :
+     isFinalHour   ? "🔥" :
+     "•"
+//-------------------------- Helpers
 we_count_above_opens(_price) =>
     int cnt = 0
-    cnt += not na(midnightOpen) and _price > midnightOpen ? 1 : 0
-    cnt += not na(weeklyOpen)   and _price > weeklyOpen   ? 1 : 0
-    cnt += not na(open830)      and _price > open830      ? 1 : 0
-    cnt += not na(open930)      and _price > open930      ? 1 : 0
+    cnt += not na(dailyMidnightOpen) and _price > dailyMidnightOpen ? 1 : 0
+    cnt += not na(open830)           and _price > open830           ? 1 : 0
+    cnt += not na(open930)           and _price > open930           ? 1 : 0
+    cnt += not na(open1330)          and _price > open1330          ? 1 : 0
     cnt
 
 we_count_below_opens(_price) =>
     int cnt = 0
-    cnt += not na(midnightOpen) and _price < midnightOpen ? 1 : 0
-    cnt += not na(weeklyOpen)   and _price < weeklyOpen   ? 1 : 0
-    cnt += not na(open830)      and _price < open830      ? 1 : 0
-    cnt += not na(open930)      and _price < open930      ? 1 : 0
+    cnt += not na(dailyMidnightOpen) and _price < dailyMidnightOpen ? 1 : 0
+    cnt += not na(open830)           and _price < open830           ? 1 : 0
+    cnt += not na(open930)           and _price < open930           ? 1 : 0
+    cnt += not na(open1330)          and _price < open1330          ? 1 : 0
     cnt
-
 // Replace these with your real SMT booleans from your SMT module
 grade_bullishSMT = bullishSMT_now
 grade_bearishSMT = bearishSMT_now
@@ -1213,7 +1271,7 @@ we_long_tooltip(_price, _bullishSMT_now) =>
         "✓ Key Level\n" +
         "Openings below price: " + str.tostring(belowCount) + "/4\n" +
         "Bullish SMT: " + (_bullishSMT_now ? "Yes" : "No") + "\n" +
-        "Session: NY AM"
+        "SESSION: " + sessionIcon + " " + sessionName
     )
 
 we_short_tooltip(_price, _bearishSMT_now) =>
@@ -1226,7 +1284,7 @@ we_short_tooltip(_price, _bearishSMT_now) =>
         "✓ Key Level\n" +
         "Openings above price: " + str.tostring(aboveCount) + "/4\n" +
         "Bearish SMT: " + (_bearishSMT_now ? "Yes" : "No") + "\n" +
-        "Session: NY AM"
+        "SESSION: " + sessionIcon + " " + sessionName
     )
 
 //------------------------- Draw hoverable marker labels
