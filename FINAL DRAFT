@@ -685,22 +685,15 @@ we_tapBearFvg_15m = we_tapBearFvg_15m_live and not we_tapBearFvg_15m_live[1]
 we_sweepLow_15m  = hl_lowMitigatedCount  > hl_lowMitigatedCount[1]
 we_sweepHigh_15m = hl_highMitigatedCount > hl_highMitigatedCount[1]
 
-var int we_long_setup_counter  = 0
-var int we_short_setup_counter = 0
-
 //------------------------- Update timestamps
 if we_sweepLow_15m
     we_lastSweepLowTime := time
-    we_long_setup_counter += 1
 if we_sweepHigh_15m
     we_lastSweepHighTime := time
-    we_short_setup_counter += 1
 if we_tapBullFvg_15m
     we_lastTapBullTime := time
-    we_long_setup_counter += 1
 if we_tapBearFvg_15m
     we_lastTapBearTime := time
-    we_short_setup_counter += 1
 
 //------------------------- Recent checks
 we_recentSweepLow  = not na(we_lastSweepLowTime)  and (time - we_lastSweepLowTime)  <= we_recent_ms
@@ -708,39 +701,47 @@ we_recentSweepHigh = not na(we_lastSweepHighTime) and (time - we_lastSweepHighTi
 we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime)   <= we_recent_ms
 we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
-//------------------------- IFVG trigger bar (1m only)
-we_ifvg_bar = timeframe.isminutes and timeframe.multiplier == 1 and (ifvg_bull_created or ifvg_bear_created)
+//------------------------- Track IFVG creation times
+var int we_lastBullIfvgTime = na
+var int we_lastBearIfvgTime = na
 
-we_close_above_bear_fvg = we_ifvg_bar and not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
-we_close_below_bull_fvg = we_ifvg_bar and not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
+if ifvg_bull_created
+    we_lastBullIfvgTime := time
 
-//------------------------- Final WE MODEL rules (anchored to IFVG bar)
+if ifvg_bear_created
+    we_lastBearIfvgTime := time
+
+// Allow trigger shortly AFTER the IFVG is created
+we_recentBullIfvg = not na(we_lastBullIfvgTime) and (time - we_lastBullIfvgTime) <= (3 * 60000)
+we_recentBearIfvg = not na(we_lastBearIfvgTime) and (time - we_lastBearIfvgTime) <= (3 * 60000)
+
+// Confirmation conditions are no longer locked to the exact creation bar
+we_close_above_bear_fvg = not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
+we_close_below_bull_fvg = not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
+
 we_long_setup = (
-    we_ifvg_bar and
+    we_recentBullIfvg and
     (
-        (we_recentSweepLow  and we_close_above_bear_fvg) or
-        (we_recentTapBull   and we_close_above_bear_fvg) and
-        we_long_setup_counter == 1
-    )
+        we_recentSweepLow or we_recentTapBull
+    ) and
+    we_close_above_bear_fvg
 )
 
 we_short_setup = (
-    we_ifvg_bar and
+    we_recentBearIfvg and
     (
-        (we_recentSweepHigh and we_close_below_bull_fvg) or
-        (we_recentTapBear   and we_close_below_bull_fvg) and
-        we_short_setup_counter == 1
-    )
+        we_recentSweepHigh or we_recentTapBear
+    ) and
+    we_close_below_bull_fvg
 )
-
 //------------------------- Debounce + Cooldown + 1-per-15m-candle
-both_setups   = we_long_setup and we_short_setup
 
-we_short_only = we_short_setup
+
 we_long_only  = we_long_setup and not we_short_setup
+we_short_only = we_short_setup and not we_long_setup
 
-we_long_edge  = we_long_only and not we_long_only[1]
-we_short_edge = we_short_only and not we_short_only[1]
+we_long_edge  = we_long_only 
+we_short_edge = we_short_only 
 
 var int we_lastSignalBar = na
 we_inCooldown = not na(we_lastSignalBar) and (bar_index - we_lastSignalBar) <= we_cooldown_bars
@@ -756,13 +757,11 @@ if we_long_fire or we_short_fire
     if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
         usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
         ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
-        we_long_setup_counter -= 1
 
     // SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
     if we_short_fire and ifvg_bear_created and array.size(ifvg_bull_inv_ary) > 0
         usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
         ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
-        we_short_setup_counter -= 1
 
 //------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
@@ -985,63 +984,6 @@ if mnq_showMNQLabel and sl_enabled and is1m
             color = color.new(color.red, 0)
         )
 //==================================================================================================
-//=========================== OPENING PRICES (WE MODEL) ============================================
-//==================================================================================================
-var float dailyMidnightOpen = na
-var float open830           = na
-var float open930           = na
-var float open1330          = na
-
-//----------------------------------------------------
-// DAILY RESET FOR OPENING PRICES
-//----------------------------------------------------
-nyHour   = hour(time, "America/New_York")
-nyMinute = minute(time, "America/New_York")
-newDay   = ta.change(time("D", "America/New_York")) != 0
-curMins  = nyHour * 60 + nyMinute
-
-if newDay
-    dailyMidnightOpen := na
-    open830 := na
-    open930 := na
-    open1330 := na
-
-if nyHour == 0 and nyMinute == 0
-    dailyMidnightOpen := open
-
-if nyHour == 8 and nyMinute == 30
-    open830 := open
-
-if nyHour == 9 and nyMinute == 30
-    open930 := open
-
-if nyHour == 13 and nyMinute == 30
-    open1330 := open
-
-isAsia         = curMins >= 18 * 60 or curMins <= 1 * 60 + 59
-isLondon       = curMins >= 2 * 60  and curMins <= 5 * 60 + 59
-isNyOpen       = curMins >= 6 * 60  and curMins <= 8 * 60 + 29
-isNyPremarket  = curMins >= 8 * 60 + 30 and curMins <= 9 * 60 + 29
-isNyAM         = curMins >= 9 * 60 + 30 and curMins <= 11 * 60 + 29
-isLunch        = curMins >= 11 * 60 + 30 and curMins <= 13 * 60 + 29
-isNyPM         = curMins >= 13 * 60 + 30 and curMins <= 14 * 60 + 59
-isFinalHour    = curMins >= 15 * 60 and curMins <= 16 * 60
-//----------------------------------------------------
-// ONLY CHECK TODAY'S OPENING PRICES
-//----------------------------------------------------
-aboveTodayOpens = (
-    (na(dailyMidnightOpen) or close > dailyMidnightOpen) and
-    (na(open830) or close > open830) and
-    (na(open930) or close > open930) and
-    (na(open1330) or close > open1330)
-)
-belowTodayOpens = (
-    (na(dailyMidnightOpen) or close < dailyMidnightOpen) and
-    (na(open830) or close < open830) and
-    (na(open930) or close < open930) and
-    (na(open1330) or close < open1330)
-)
-//==================================================================================================
 //====================================== SMT MODULE ================================================
 //==================================================================================================
 
@@ -1187,6 +1129,65 @@ if bullishSMT_now
     array.push(smtLabels, lb)
 
 //==================================================================================================
+//=========================== OPENING PRICES (WE MODEL) ============================================
+//==================================================================================================
+var float dailyMidnightOpen = na
+var float open830           = na
+var float open930           = na
+var float open1330          = na
+
+//----------------------------------------------------
+// DAILY RESET FOR OPENING PRICES
+//----------------------------------------------------
+nyHour   = hour(time, "America/New_York")
+nyMinute = minute(time, "America/New_York")
+newDay   = ta.change(time("D", "America/New_York")) != 0
+curMins  = nyHour * 60 + nyMinute
+
+if newDay
+    dailyMidnightOpen := na
+    open830 := na
+    open930 := na
+    open1330 := na
+
+if nyHour == 0 and nyMinute == 0
+    dailyMidnightOpen := open
+
+if nyHour == 8 and nyMinute == 30
+    open830 := open
+
+if nyHour == 9 and nyMinute == 30
+    open930 := open
+
+if nyHour == 13 and nyMinute == 30
+    open1330 := open
+
+isAsia         = curMins >= 18 * 60 or curMins <= 1 * 60 + 59
+isLondon       = curMins >= 2 * 60  and curMins <= 5 * 60 + 59
+isNyOpen       = curMins >= 6 * 60  and curMins <= 8 * 60 + 29
+isNyPremarket  = curMins >= 8 * 60 + 30 and curMins <= 9 * 60 + 29
+isNyAM         = curMins >= 9 * 60 + 30 and curMins <= 11 * 60 + 29
+isLunch        = curMins >= 11 * 60 + 30 and curMins <= 13 * 60 + 29
+isNyPM         = curMins >= 13 * 60 + 30 and curMins <= 14 * 60 + 59
+isFinalHour    = curMins >= 15 * 60 and curMins <= 16 * 60
+//----------------------------------------------------
+// ONLY CHECK TODAY'S OPENING PRICES
+//----------------------------------------------------
+aboveTodayOpens = (
+    (na(dailyMidnightOpen) or close > dailyMidnightOpen) and
+    (na(open830) or close > open830) and
+    (na(open930) or close > open930) and
+    (na(open1330) or close > open1330)
+)
+belowTodayOpens = (
+    (na(dailyMidnightOpen) or close < dailyMidnightOpen) and
+    (na(open830) or close < open830) and
+    (na(open930) or close < open930) and
+    (na(open1330) or close < open1330)
+)
+
+
+//==================================================================================================
 //=========================== WE MODEL GRADE TOOLTIP ===============================================
 //==================================================================================================
 
@@ -1198,7 +1199,7 @@ grade_show_tooltip = input.bool(true, "GRADE: Show Hover Tooltip", group="WE MOD
 
 
 
-sessionName =
+sessionName = (
      isAsia        ? "ASIA" :
      isLondon      ? "LONDON" :
      isNyOpen      ? "NY OPEN" :
@@ -1208,8 +1209,8 @@ sessionName =
      isNyPM        ? "NY PM" :
      isFinalHour   ? "FINAL HOUR MACRO" :
      "OFF SESSION"
-
-sessionIcon =
+)
+sessionIcon =(
      isAsia        ? "🌙" :
      isLondon      ? "🇬🇧" :
      isNyOpen      ? "🔔" :
@@ -1219,6 +1220,7 @@ sessionIcon =
      isNyPM        ? "⚡" :
      isFinalHour   ? "🔥" :
      "•"
+)
 //-------------------------- Helpers
 we_count_above_opens(_price) =>
     int cnt = 0
