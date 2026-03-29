@@ -737,32 +737,41 @@ we_short_setup = (
 //------------------------- Debounce + Cooldown + 1-per-15m-candle
 
 
+//------------------------- Debounce + SAME-DIRECTION cooldown
+we_sameDirCooldownBars = input.int(10, "WE MODEL: Same Direction Cooldown (bars)", minval=0, group="WE MODEL")
+
 we_long_only  = we_long_setup and not we_short_setup
 we_short_only = we_short_setup and not we_long_setup
 
-we_long_edge  = we_long_only 
-we_short_edge = we_short_only 
+// restore edge logic so it only triggers on the FIRST valid bar
+we_long_edge  = we_long_only and not we_long_only[1]
+we_short_edge = we_short_only and not we_short_only[1]
 
-var int we_lastSignalBar = na
-we_inCooldown = not na(we_lastSignalBar) and (bar_index - we_lastSignalBar) <= we_cooldown_bars
+// separate cooldowns by direction
+var int we_lastLongBar  = na
+var int we_lastShortBar = na
 
-we_long_fire  = we_long_edge  and not we_inCooldown 
-we_short_fire = we_short_edge and not we_inCooldown 
+we_long_inCooldown  = not na(we_lastLongBar)  and (bar_index - we_lastLongBar)  <= we_sameDirCooldownBars
+we_short_inCooldown = not na(we_lastShortBar) and (bar_index - we_lastShortBar) <= we_sameDirCooldownBars
 
-if we_long_fire or we_short_fire
-    we_lastSignalBar := bar_index
+we_long_fire  = we_long_edge  and not we_long_inCooldown
+we_short_fire = we_short_edge and not we_short_inCooldown
 
+if we_long_fire
+    we_lastLongBar := bar_index
 
-    // LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
-    if we_long_fire and ifvg_bull_created and array.size(ifvg_bear_inv_ary) > 0
-        usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
-        ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+if we_short_fire
+    we_lastShortBar := bar_index
 
-    // SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
-    if we_short_fire and ifvg_bear_created and array.size(ifvg_bull_inv_ary) > 0
-        usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
-        ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
+// LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
+if we_long_fire and array.size(ifvg_bear_inv_ary) > 0
+    usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
+    ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
 
+// SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
+if we_short_fire and array.size(ifvg_bull_inv_ary) > 0
+    usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
+    ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
 //------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
 alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
