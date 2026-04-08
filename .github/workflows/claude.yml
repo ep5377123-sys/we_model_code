@@ -4,6 +4,10 @@ on:
   issue_comment:
     types: [created]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   claude-response:
     runs-on: ubuntu-latest
@@ -21,4 +25,4 @@ jobs:
       - name: Run Claude
         uses: anthropics/claude-code-action@v1
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github_token: ${{ steps.app-token.outputs.token }}
