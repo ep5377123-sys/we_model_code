@@ -514,7 +514,8 @@ if hl_enabled and hl_new15 and not na(hl_p2Low) and not na(hl_p1Low)
     bear1 = hl_c15[1] < hl_o15[1]
     bull1 = hl_c15[1] > hl_o15[1]
 
-    x2 = hl_extendBars > 0 ? (time + hl_extendBars * hl_barMs) : time
+    // FIX: compute x2 using integer cast to avoid type mismatch
+    int x2 = hl_extendBars > 0 ? int(time + hl_extendBars * hl_barMs) : time
 
     // LOW: bearish [2] then bullish [1] -> true lowest wick
     if bear2 and bull1
@@ -522,6 +523,7 @@ if hl_enabled and hl_new15 and not na(hl_p2Low) and not na(hl_p1Low)
         int   xLow = hl_l15[2] <= hl_l15[1] ? hl_p15[2] : hl_p15[1]
         hl_addLevel(false, xLow, yLow, x2)
         hl_trim(hl_loLines, hl_loLabs)
+        hl_lowCreatedCount += 1  // FIX: was never incremented — alerts were broken
 
     // HIGH: bullish [2] then bearish [1] -> true highest wick
     if bull2 and bear1
@@ -529,32 +531,31 @@ if hl_enabled and hl_new15 and not na(hl_p2Low) and not na(hl_p1Low)
         int   xHigh = hl_h15[2] >= hl_h15[1] ? hl_p15[2] : hl_p15[1]
         hl_addLevel(true, xHigh, yHigh, x2)
         hl_trim(hl_hiLines, hl_hiLabs)
-// Extend lines/labels to the right
-if hl_enabled and barstate.islast and hl_extendBars > 0
-    endX = time + hl_extendBars * hl_barMs
+        hl_highCreatedCount += 1  // FIX: was never incremented — alerts were broken
 
-    // --- SAFE: extend line x2 ---
-// create an x-coordinate in the future
+// FIX: removed duplicate `endX` declaration — only one typed int declaration kept here
 int endX = time + hl_extendBars * hl_barMs
 
-if array.size(hl_hiLines) > 0
-    for i = 0 to array.size(hl_hiLines) - 1
-        line.set_x2(array.get(hl_hiLines, i), endX)
+// Extend lines/labels to the right
+if hl_enabled and barstate.islast and hl_extendBars > 0
+    if array.size(hl_hiLines) > 0
+        for i = 0 to array.size(hl_hiLines) - 1
+            line.set_x2(array.get(hl_hiLines, i), endX)
 
-if array.size(hl_loLines) > 0
-    for i = 0 to array.size(hl_loLines) - 1
-        line.set_x2(array.get(hl_loLines, i), endX)
+    if array.size(hl_loLines) > 0
+        for i = 0 to array.size(hl_loLines) - 1
+            line.set_x2(array.get(hl_loLines, i), endX)
 
-// --- SAFE: move label x ---
-if hl_showLabels
-    if array.size(hl_hiLabs) > 0
-        for i = 0 to array.size(hl_hiLabs) - 1
-            label.set_x(array.get(hl_hiLabs, i), endX)
+    if hl_showLabels
+        if array.size(hl_hiLabs) > 0
+            for i = 0 to array.size(hl_hiLabs) - 1
+                label.set_x(array.get(hl_hiLabs, i), endX)
 
-    if array.size(hl_loLabs) > 0
-        for i = 0 to array.size(hl_loLabs) - 1
-            label.set_x(array.get(hl_loLabs, i), endX)
-//------------------------- Delete On Touch (Mitigation) - SAFE VERSION
+        if array.size(hl_loLabs) > 0
+            for i = 0 to array.size(hl_loLabs) - 1
+                label.set_x(array.get(hl_loLabs, i), endX)
+
+//------------------------- Delete On Touch (Mitigation)
 if hl_enabled and hl_deleteOnTouch
 
     //================ HIGH LINES =================
@@ -719,12 +720,94 @@ we_recentBearIfvg = not na(we_lastBearIfvgTime) and (time - we_lastBearIfvgTime)
 we_close_above_bear_fvg = not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
 we_close_below_bull_fvg = not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
 
+//==================================================================================================
+//=========== WE MODEL: First-IFVG-after-tap + Per-key-level limit + R:R >= 1 gate ================
+//==================================================================================================
+// Adds three rules without rewriting the existing engine:
+//   (1) Use the FIRST IFVG that forms after a key-level tap/sweep, not the newest one.
+//   (2) Allow only ONE setup per key-level event.
+//   (3) Reject setups whose reward to the opposite-direction 15m level is < 1R.
+
+// --- Local swing tracking (mirrors the SL module which is declared later in the file).
+//     We need swing low/high here to compute risk before we_long_fire / we_short_fire.
+var float we_rr_swingHigh = na
+var float we_rr_swingLow  = na
+we_rr_bull1 = close[1] > open[1]
+we_rr_bear1 = close[1] < open[1]
+we_rr_bull0 = close > open
+we_rr_bear0 = close < open
+if ifvg_only_1m
+    if we_rr_bull1 and we_rr_bear0
+        we_rr_swingHigh := high[1]
+    if we_rr_bear1 and we_rr_bull0
+        we_rr_swingLow  := low[1]
+
+// --- (1) First IFVG after the most recent long/short key-level event.
+//     Stores a reference to the actual IFVG so it survives later array housekeeping.
+var IFVG_fvg we_firstBullIfvgAfterTap = na
+var IFVG_fvg we_firstBearIfvgAfterTap = na
+
+// Re-arm whenever a fresh key-level event occurs on that side
+if we_sweepLow_15m or we_tapBullFvg_15m
+    we_firstBullIfvgAfterTap := na
+if we_sweepHigh_15m or we_tapBearFvg_15m
+    we_firstBearIfvgAfterTap := na
+
+// Capture the first IFVG that forms while a recent long-side key level is active.
+// Bullish IFVGs live in ifvg_bear_inv_ary (a bearish FVG that inverted bullish).
+if ifvg_bull_created and na(we_firstBullIfvgAfterTap) and (we_recentSweepLow or we_recentTapBull) and array.size(ifvg_bear_inv_ary) > 0
+    we_firstBullIfvgAfterTap := array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
+
+if ifvg_bear_created and na(we_firstBearIfvgAfterTap) and (we_recentSweepHigh or we_recentTapBear) and array.size(ifvg_bull_inv_ary) > 0
+    we_firstBearIfvgAfterTap := array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
+
+// --- (2) One setup per key level. Identity = timestamp of the most recent tap/sweep on that side.
+we_curBullKeyLevelId = math.max(nz(we_lastSweepLowTime, 0),  nz(we_lastTapBullTime, 0))
+we_curBearKeyLevelId = math.max(nz(we_lastSweepHighTime, 0), nz(we_lastTapBearTime, 0))
+
+var int we_lastUsedBullKeyLevelId = na
+var int we_lastUsedBearKeyLevelId = na
+
+we_bullKeyLevelFresh = we_curBullKeyLevelId > 0 and we_curBullKeyLevelId != nz(we_lastUsedBullKeyLevelId, -1)
+we_bearKeyLevelFresh = we_curBearKeyLevelId > 0 and we_curBearKeyLevelId != nz(we_lastUsedBearKeyLevelId, -1)
+
+// --- (3) R:R to opposite-direction 15m key level (must be >= 1)
+we_nearestHighAbove() =>
+    float r = na
+    if array.size(hl_hiLines) > 0
+        for i = 0 to array.size(hl_hiLines) - 1
+            yv = line.get_y1(array.get(hl_hiLines, i))
+            if yv > close and (na(r) or yv < r)
+                r := yv
+    r
+
+we_nearestLowBelow() =>
+    float r = na
+    if array.size(hl_loLines) > 0
+        for i = 0 to array.size(hl_loLines) - 1
+            yv = line.get_y1(array.get(hl_loLines, i))
+            if yv < close and (na(r) or yv > r)
+                r := yv
+    r
+
+we_long_target  = we_nearestHighAbove()
+we_short_target = we_nearestLowBelow()
+
+we_long_risk_calc  = (not na(we_rr_swingLow))  ? (close - we_rr_swingLow)  : na
+we_short_risk_calc = (not na(we_rr_swingHigh)) ? (we_rr_swingHigh - close) : na
+
+we_long_rrOk  = not na(we_long_risk_calc)  and we_long_risk_calc  > 0 and not na(we_long_target)  and ((we_long_target  - close) / we_long_risk_calc)  >= 1.0
+we_short_rrOk = not na(we_short_risk_calc) and we_short_risk_calc > 0 and not na(we_short_target) and ((close - we_short_target) / we_short_risk_calc) >= 1.0
+
 we_long_setup = (
     we_recentBullIfvg and
     (
         we_recentSweepLow or we_recentTapBull
     ) and
-    we_close_above_bear_fvg
+    we_close_above_bear_fvg and
+    not na(we_firstBullIfvgAfterTap) and
+    we_bullKeyLevelFresh and
+    we_long_rrOk
 )
 
 we_short_setup = (
@@ -732,7 +815,10 @@ we_short_setup = (
     (
         we_recentSweepHigh or we_recentTapBear
     ) and
-    we_close_below_bull_fvg
+    we_close_below_bull_fvg and
+    not na(we_firstBearIfvgAfterTap) and
+    we_bearKeyLevelFresh and
+    we_short_rrOk
 )
 //------------------------- Debounce + Cooldown + 1-per-15m-candle
 
@@ -759,19 +845,19 @@ we_short_fire = we_short_edge and not we_short_inCooldown
 
 if we_long_fire
     we_lastLongBar := bar_index
+    we_lastUsedBullKeyLevelId := we_curBullKeyLevelId   // mark this key level as consumed
 
 if we_short_fire
     we_lastShortBar := bar_index
+    we_lastUsedBearKeyLevelId := we_curBearKeyLevelId   // mark this key level as consumed
 
-// LONG uses the newest bullish IFVG (bearish FVG that inverted bullish)
-if we_long_fire and array.size(ifvg_bear_inv_ary) > 0
-    usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+// LONG uses the FIRST bullish IFVG that formed after the tap (captured above)
+if we_long_fire and not na(we_firstBullIfvgAfterTap)
+    ifvg_push_used(ifvg_used_long_ary, we_firstBullIfvgAfterTap)
 
-// SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish)
-if we_short_fire and array.size(ifvg_bull_inv_ary) > 0
-    usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
+// SHORT uses the FIRST bearish IFVG that formed after the tap (captured above)
+if we_short_fire and not na(we_firstBearIfvgAfterTap)
+    ifvg_push_used(ifvg_used_short_ary, we_firstBearIfvgAfterTap)
 //------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
 alertcondition(we_short_fire, "WE MODEL SHORT", "WE MODEL SHORT setup")
@@ -914,7 +1000,7 @@ if sl_enabled and is1m
                 text = "SL",
                 xloc = xloc.bar_time,
                 style = label.style_none,
-                textcolor = color.rgb(0, 0, 0),
+                textcolor = color.white,  // FIX: was black — invisible on dark backgrounds
                 size = size.small
             )
 
@@ -938,7 +1024,7 @@ if sl_enabled and is1m
                 text = "SL",
                 xloc = xloc.bar_time,
                 style = label.style_none,
-                textcolor = color.black,
+                textcolor = color.white,  // FIX: was black — invisible on dark backgrounds
                 size = size.small
             )
 
