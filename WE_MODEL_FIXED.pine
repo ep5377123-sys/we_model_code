@@ -899,7 +899,7 @@ if entry_enabled and is1m
         label.new(
             x = time + (entry_extendBars * barMs),
             y = entryPrice,
-            text = "LONG",
+            text = "WE+",
             xloc = xloc.bar_time,
             style = label.style_none,
             textcolor = entryLongColor,
@@ -926,7 +926,7 @@ if entry_enabled and is1m
         label.new(
             x = time + (entry_extendBars * barMs),
             y = entryPrice,
-            text = "SHORT",
+            text = "WE-",
             xloc = xloc.bar_time,
             style = label.style_none,
             textcolor = entryShortColor,
