@@ -799,13 +799,18 @@ we_short_risk_calc = (not na(we_rr_swingHigh)) ? (we_rr_swingHigh - close) : na
 we_long_rrOk  = not na(we_long_risk_calc)  and we_long_risk_calc  > 0 and not na(we_long_target)  and ((we_long_target  - close) / we_long_risk_calc)  >= 1.0
 we_short_rrOk = not na(we_short_risk_calc) and we_short_risk_calc > 0 and not na(we_short_target) and ((close - we_short_target) / we_short_risk_calc) >= 1.0
 
+// Entry trigger MUST be the reclaim of the FIRST captured IFVG, not an unrelated 1m FVG.
+// LONG fires when close pushes back above the top of the first bullish IFVG after the tap.
+// SHORT fires when close pushes back below the bot of the first bearish IFVG after the tap.
+we_first_bull_ifvg_reclaimed = not na(we_firstBullIfvgAfterTap) and close > we_firstBullIfvgAfterTap.top
+we_first_bear_ifvg_reclaimed = not na(we_firstBearIfvgAfterTap) and close < we_firstBearIfvgAfterTap.bot
+
 we_long_setup = (
     we_recentBullIfvg and
     (
         we_recentSweepLow or we_recentTapBull
     ) and
-    we_close_above_bear_fvg and
-    not na(we_firstBullIfvgAfterTap) and
+    we_first_bull_ifvg_reclaimed and
     we_bullKeyLevelFresh and
     we_long_rrOk
 )
@@ -815,8 +820,7 @@ we_short_setup = (
     (
         we_recentSweepHigh or we_recentTapBear
     ) and
-    we_close_below_bull_fvg and
-    not na(we_firstBearIfvgAfterTap) and
+    we_first_bear_ifvg_reclaimed and
     we_bearKeyLevelFresh and
     we_short_rrOk
 )
