@@ -684,57 +684,83 @@ we_recentSweepHigh = not na(we_lastSweepHighTime) and (time - we_lastSweepHighTi
 we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime)   <= we_recent_ms
 we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
-//------------------------- Track IFVG creation times (FIRST IFVG after key event only)
-var int  we_lastBullIfvgTime   = na
-var int  we_lastBearIfvgTime   = na
-var bool we_waitingForBullIfvg = false  // set when key event fires; cleared when first IFVG locks in
-var bool we_waitingForBearIfvg = false
-var int  we_targetBullXval     = na     // x_val of the IFVG to draw on LONG signal
-var int  we_targetBearXval     = na     // x_val of the IFVG to draw on SHORT signal
+//------------------------- Track FIRST IFVG after key event
+// Strategy:
+//   Bull setup (sweep low): among all bear FVGs inverted on the first bar after the sweep,
+//   pick the one with the LOWEST top — that is the FVG formed closest to the key level
+//   bottom, i.e. earliest in the bounce sequence.
+//
+//   Bear setup (sweep high): among all bull FVGs inverted on the first bar after the sweep,
+//   pick the one with the HIGHEST top — closest to the key level top.
+//
+// Signal triggers when price closes through that specific IFVG (above its top for bull,
+// below its bot for bear), while the original key event is still within the valid window.
 
-// When a new key level event fires, reset and wait for the FIRST IFVG that follows it
+var bool  we_waitingForBullIfvg = false
+var bool  we_waitingForBearIfvg = false
+var float we_targetBullTop      = na    // close > this  →  long signal
+var float we_targetBullBot      = na    // bot of locked-in bull IFVG (for drawing)
+var int   we_targetBullXval     = na    // bar time of inversion (for drawing lookup)
+var float we_targetBearTop      = na    // top of locked-in bear IFVG (for drawing)
+var float we_targetBearBot      = na    // close < this  →  short signal
+var int   we_targetBearXval     = na
+
+// Key event fires → arm the wait and clear the previous target
 if we_sweepLow_15m or we_tapBullFvg_15m
     we_waitingForBullIfvg := true
-    we_lastBullIfvgTime   := na
+    we_targetBullTop      := na
+    we_targetBullBot      := na
     we_targetBullXval     := na
 
 if we_sweepHigh_15m or we_tapBearFvg_15m
     we_waitingForBearIfvg := true
-    we_lastBearIfvgTime   := na
+    we_targetBearTop      := na
+    we_targetBearBot      := na
     we_targetBearXval     := na
 
-// Lock in only the FIRST bull IFVG formed after the active key event; ignore later ones
+// Lock in first bull IFVG: scan everything inverted this bar, keep lowest top
 if ifvg_bull_created and we_waitingForBullIfvg
-    we_lastBullIfvgTime   := time
-    we_targetBullXval     := time  // newly inverted IFVG has x_val == current bar time
-    we_waitingForBullIfvg := false // stop — do not overwrite with later IFVGs
+    _bst = float(na)
+    _bsb = float(na)
+    for _bi = 0 to ifvg_bear_inv_ary.size() - 1
+        _bc = ifvg_bear_inv_ary.get(_bi)
+        if _bc.x_val == time
+            if na(_bst) or _bc.top < _bst
+                _bst := _bc.top
+                _bsb := _bc.bot
+    if not na(_bst)
+        we_targetBullTop      := _bst
+        we_targetBullBot      := _bsb
+        we_targetBullXval     := time
+        we_waitingForBullIfvg := false
 
-// Lock in only the FIRST bear IFVG formed after the active key event; ignore later ones
+// Lock in first bear IFVG: scan everything inverted this bar, keep highest top
 if ifvg_bear_created and we_waitingForBearIfvg
-    we_lastBearIfvgTime   := time
-    we_targetBearXval     := time
-    we_waitingForBearIfvg := false
+    _bst = float(na)
+    _bsb = float(na)
+    for _bi = 0 to ifvg_bull_inv_ary.size() - 1
+        _bc = ifvg_bull_inv_ary.get(_bi)
+        if _bc.x_val == time
+            if na(_bst) or _bc.top > _bst
+                _bst := _bc.top
+                _bsb := _bc.bot
+    if not na(_bst)
+        we_targetBearTop      := _bst
+        we_targetBearBot      := _bsb
+        we_targetBearXval     := time
+        we_waitingForBearIfvg := false
 
-we_recentBullIfvg = not na(we_lastBullIfvgTime) and (time - we_lastBullIfvgTime) <= (3 * 60000)
-we_recentBearIfvg = not na(we_lastBearIfvgTime) and (time - we_lastBearIfvgTime) <= (3 * 60000)
-
-we_close_above_bear_fvg = not na(we_lastBearFvgTop_1m) and close > we_lastBearFvgTop_1m
-we_close_below_bull_fvg = not na(we_lastBullFvgBot_1m) and close < we_lastBullFvgBot_1m
-
+// Signal: key event is still recent AND close crosses through the locked-in IFVG
 we_long_setup = (
-    we_recentBullIfvg and
-    (
-        we_recentSweepLow or we_recentTapBull
-    ) and
-    we_close_above_bear_fvg
+    (we_recentSweepLow or we_recentTapBull) and
+    not na(we_targetBullTop) and
+    close > we_targetBullTop
 )
 
 we_short_setup = (
-    we_recentBearIfvg and
-    (
-        we_recentSweepHigh or we_recentTapBear
-    ) and
-    we_close_below_bull_fvg
+    (we_recentSweepHigh or we_recentTapBear) and
+    not na(we_targetBearBot) and
+    close < we_targetBearBot
 )
 
 //------------------------- Debounce + SAME-DIRECTION cooldown
@@ -761,30 +787,30 @@ if we_long_fire
 if we_short_fire
     we_lastShortBar := bar_index
 
-// LONG: find the specific IFVG locked in as the first one after the key event
+// LONG: draw the locked-in IFVG — match by price level (top+bot uniquely identify it)
 if we_long_fire and ifvg_bear_inv_ary.size() > 0
     found_bull = false
-    if not na(we_targetBullXval)
-        for i = ifvg_bear_inv_ary.size() - 1 to 0
-            candidate = ifvg_bear_inv_ary.get(i)
-            if candidate.x_val == we_targetBullXval
-                ifvg_push_used(ifvg_used_long_ary, candidate)
+    if not na(we_targetBullTop)
+        for _i = 0 to ifvg_bear_inv_ary.size() - 1
+            _c = ifvg_bear_inv_ary.get(_i)
+            if _c.top == we_targetBullTop and _c.bot == we_targetBullBot
+                ifvg_push_used(ifvg_used_long_ary, _c)
                 found_bull := true
                 break
-    if not found_bull  // fallback: target was already mitigated/removed, use most recent
+    if not found_bull  // fallback: target already mitigated/removed, use most recent
         ifvg_push_used(ifvg_used_long_ary, array.get(ifvg_bear_inv_ary, ifvg_bear_inv_ary.size() - 1))
 
-// SHORT: find the specific IFVG locked in as the first one after the key event
+// SHORT: draw the locked-in IFVG — match by price level
 if we_short_fire and ifvg_bull_inv_ary.size() > 0
     found_bear = false
-    if not na(we_targetBearXval)
-        for i = ifvg_bull_inv_ary.size() - 1 to 0
-            candidate = ifvg_bull_inv_ary.get(i)
-            if candidate.x_val == we_targetBearXval
-                ifvg_push_used(ifvg_used_short_ary, candidate)
+    if not na(we_targetBearTop)
+        for _i = 0 to ifvg_bull_inv_ary.size() - 1
+            _c = ifvg_bull_inv_ary.get(_i)
+            if _c.top == we_targetBearTop and _c.bot == we_targetBearBot
+                ifvg_push_used(ifvg_used_short_ary, _c)
                 found_bear := true
                 break
-    if not found_bear  // fallback: target was already mitigated/removed, use most recent
+    if not found_bear  // fallback: target already mitigated/removed, use most recent
         ifvg_push_used(ifvg_used_short_ary, array.get(ifvg_bull_inv_ary, ifvg_bull_inv_ary.size() - 1))
 
 //------------------------- Alerts + Markers
