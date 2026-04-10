@@ -684,73 +684,66 @@ we_recentSweepHigh = not na(we_lastSweepHighTime) and (time - we_lastSweepHighTi
 we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime)   <= we_recent_ms
 we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
-//------------------------- Track FIRST IFVG after key event
-// Strategy:
-//   Bull setup (sweep low): among all bear FVGs inverted on the first bar after the sweep,
-//   pick the one with the LOWEST top — that is the FVG formed closest to the key level
-//   bottom, i.e. earliest in the bounce sequence.
+//------------------------- Identify the FIRST valid IFVG after the most recent key event
 //
-//   Bear setup (sweep high): among all bull FVGs inverted on the first bar after the sweep,
-//   pick the one with the HIGHEST top — closest to the key level top.
-//
-// Signal triggers when price closes through that specific IFVG (above its top for bull,
-// below its bot for bear), while the original key event is still within the valid window.
+// Approach: scan the live IFVG arrays on EVERY BAR — no waiting flags, no ifvg_bull_created
+// dependency. Among every IFVG whose inversion time (x_val) is >= the most recent key
+// event time, pick the one with the SMALLEST x_val (earliest inversion). Break same-bar
+// ties by choosing the LOWEST top for bull setups (deepest in the sweep, formed closest
+// to the key level) or HIGHEST top for bear setups. Signal fires when close crosses that
+// specific IFVG while the key event is still within the valid window.
 
-var bool  we_waitingForBullIfvg = false
-var bool  we_waitingForBearIfvg = false
-var float we_targetBullTop      = na    // close > this  →  long signal
-var float we_targetBullBot      = na    // bot of locked-in bull IFVG (for drawing)
-var int   we_targetBullXval     = na    // bar time of inversion (for drawing lookup)
-var float we_targetBearTop      = na    // top of locked-in bear IFVG (for drawing)
-var float we_targetBearBot      = na    // close < this  →  short signal
-var int   we_targetBearXval     = na
+// Targets are recalculated fresh every bar — no persistent state required.
+we_targetBullTop = float(na)
+we_targetBullBot = float(na)
+we_targetBearTop = float(na)
+we_targetBearBot = float(na)
 
-// Key event fires → arm the wait and clear the previous target
-if we_sweepLow_15m or we_tapBullFvg_15m
-    we_waitingForBullIfvg := true
-    we_targetBullTop      := na
-    we_targetBullBot      := na
-    we_targetBullXval     := na
+// --- Bull: scan ifvg_bear_inv_ary ---
+if we_recentSweepLow or we_recentTapBull
+    _key_t = 0
+    if we_recentSweepLow and not na(we_lastSweepLowTime)
+        _key_t := math.max(_key_t, we_lastSweepLowTime)
+    if we_recentTapBull and not na(we_lastTapBullTime)
+        _key_t := math.max(_key_t, we_lastTapBullTime)
+    if _key_t > 0 and ifvg_bear_inv_ary.size() > 0
+        _bx = int(na)   // earliest x_val found so far
+        _bt = float(na) // top of winning IFVG
+        _bb = float(na) // bot of winning IFVG
+        for _bi = 0 to ifvg_bear_inv_ary.size() - 1
+            _bc = ifvg_bear_inv_ary.get(_bi)
+            if not na(_bc.x_val) and _bc.x_val >= _key_t
+                // prefer earlier inversion; break ties with lower top (closest to sweep)
+                if na(_bx) or _bc.x_val < _bx or (_bc.x_val == _bx and _bc.top < _bt)
+                    _bx := _bc.x_val
+                    _bt := _bc.top
+                    _bb := _bc.bot
+        we_targetBullTop := _bt
+        we_targetBullBot := _bb
 
-if we_sweepHigh_15m or we_tapBearFvg_15m
-    we_waitingForBearIfvg := true
-    we_targetBearTop      := na
-    we_targetBearBot      := na
-    we_targetBearXval     := na
+// --- Bear: scan ifvg_bull_inv_ary ---
+if we_recentSweepHigh or we_recentTapBear
+    _key_t = 0
+    if we_recentSweepHigh and not na(we_lastSweepHighTime)
+        _key_t := math.max(_key_t, we_lastSweepHighTime)
+    if we_recentTapBear and not na(we_lastTapBearTime)
+        _key_t := math.max(_key_t, we_lastTapBearTime)
+    if _key_t > 0 and ifvg_bull_inv_ary.size() > 0
+        _bx = int(na)
+        _bt = float(na)
+        _bb = float(na)
+        for _bi = 0 to ifvg_bull_inv_ary.size() - 1
+            _bc = ifvg_bull_inv_ary.get(_bi)
+            if not na(_bc.x_val) and _bc.x_val >= _key_t
+                // prefer earlier inversion; break ties with higher top (closest to sweep)
+                if na(_bx) or _bc.x_val < _bx or (_bc.x_val == _bx and _bc.top > _bt)
+                    _bx := _bc.x_val
+                    _bt := _bc.top
+                    _bb := _bc.bot
+        we_targetBearTop := _bt
+        we_targetBearBot := _bb
 
-// Lock in first bull IFVG: scan everything inverted this bar, keep lowest top
-if ifvg_bull_created and we_waitingForBullIfvg
-    _bst = float(na)
-    _bsb = float(na)
-    for _bi = 0 to ifvg_bear_inv_ary.size() - 1
-        _bc = ifvg_bear_inv_ary.get(_bi)
-        if _bc.x_val == time
-            if na(_bst) or _bc.top < _bst
-                _bst := _bc.top
-                _bsb := _bc.bot
-    if not na(_bst)
-        we_targetBullTop      := _bst
-        we_targetBullBot      := _bsb
-        we_targetBullXval     := time
-        we_waitingForBullIfvg := false
-
-// Lock in first bear IFVG: scan everything inverted this bar, keep highest top
-if ifvg_bear_created and we_waitingForBearIfvg
-    _bst = float(na)
-    _bsb = float(na)
-    for _bi = 0 to ifvg_bull_inv_ary.size() - 1
-        _bc = ifvg_bull_inv_ary.get(_bi)
-        if _bc.x_val == time
-            if na(_bst) or _bc.top > _bst
-                _bst := _bc.top
-                _bsb := _bc.bot
-    if not na(_bst)
-        we_targetBearTop      := _bst
-        we_targetBearBot      := _bsb
-        we_targetBearXval     := time
-        we_waitingForBearIfvg := false
-
-// Signal: key event is still recent AND close crosses through the locked-in IFVG
+// Signal: key event is still recent AND close crosses through the target IFVG
 we_long_setup = (
     (we_recentSweepLow or we_recentTapBull) and
     not na(we_targetBullTop) and
@@ -787,7 +780,7 @@ if we_long_fire
 if we_short_fire
     we_lastShortBar := bar_index
 
-// LONG: draw the locked-in IFVG — match by price level (top+bot uniquely identify it)
+// LONG: draw the target IFVG — we_targetBullTop/Bot computed just above on this same bar
 if we_long_fire and ifvg_bear_inv_ary.size() > 0
     found_bull = false
     if not na(we_targetBullTop)
@@ -797,10 +790,10 @@ if we_long_fire and ifvg_bear_inv_ary.size() > 0
                 ifvg_push_used(ifvg_used_long_ary, _c)
                 found_bull := true
                 break
-    if not found_bull  // fallback: target already mitigated/removed, use most recent
+    if not found_bull  // fallback: target removed before signal fired
         ifvg_push_used(ifvg_used_long_ary, array.get(ifvg_bear_inv_ary, ifvg_bear_inv_ary.size() - 1))
 
-// SHORT: draw the locked-in IFVG — match by price level
+// SHORT: draw the target IFVG
 if we_short_fire and ifvg_bull_inv_ary.size() > 0
     found_bear = false
     if not na(we_targetBearTop)
@@ -810,7 +803,7 @@ if we_short_fire and ifvg_bull_inv_ary.size() > 0
                 ifvg_push_used(ifvg_used_short_ary, _c)
                 found_bear := true
                 break
-    if not found_bear  // fallback: target already mitigated/removed, use most recent
+    if not found_bear  // fallback: target removed before signal fired
         ifvg_push_used(ifvg_used_short_ary, array.get(ifvg_bull_inv_ary, ifvg_bull_inv_ary.size() - 1))
 
 //------------------------- Alerts + Markers
