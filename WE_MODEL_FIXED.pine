@@ -668,15 +668,22 @@ we_tapBearFvg_15m = ifvg_only_1m and we_tapBearFvg_15m_live and not we_tapBearFv
 we_sweepLow_15m  = hl_lowMitigatedCount  > hl_lowMitigatedCount[1]
 we_sweepHigh_15m = hl_highMitigatedCount > hl_highMitigatedCount[1]
 
-//------------------------- Update timestamps
-if we_sweepLow_15m
-    we_lastSweepLowTime := time
-if we_sweepHigh_15m
-    we_lastSweepHighTime := time
-if we_tapBullFvg_15m
-    we_lastTapBullTime := time
-if we_tapBearFvg_15m
-    we_lastTapBearTime := time
+//------------------------- One-setup-per-key-level gate
+// Consumed = true after the first valid signal fires from the current key event.
+// Resets to false only when a genuinely new key event fires, allowing the next setup.
+var bool we_bullKeyConsumed = false
+var bool we_bearKeyConsumed = false
+
+//------------------------- Update timestamps + reset consumed flags on new key event
+if we_sweepLow_15m or we_tapBullFvg_15m
+    we_lastSweepLowTime  := we_sweepLow_15m  ? time : we_lastSweepLowTime
+    we_lastTapBullTime   := we_tapBullFvg_15m ? time : we_lastTapBullTime
+    we_bullKeyConsumed   := false   // new key event — allow one fresh setup
+
+if we_sweepHigh_15m or we_tapBearFvg_15m
+    we_lastSweepHighTime := we_sweepHigh_15m ? time : we_lastSweepHighTime
+    we_lastTapBearTime   := we_tapBearFvg_15m ? time : we_lastTapBearTime
+    we_bearKeyConsumed   := false
 
 //------------------------- Recent checks
 we_recentSweepLow  = not na(we_lastSweepLowTime)  and (time - we_lastSweepLowTime)  <= we_recent_ms
@@ -771,14 +778,16 @@ var int we_lastShortBar = na
 we_long_inCooldown  = not na(we_lastLongBar)  and (bar_index - we_lastLongBar)  <= we_sameDirCooldownBars
 we_short_inCooldown = not na(we_lastShortBar) and (bar_index - we_lastShortBar) <= we_sameDirCooldownBars
 
-we_long_fire  = we_long_edge  and not we_long_inCooldown
-we_short_fire = we_short_edge and not we_short_inCooldown
+we_long_fire  = we_long_edge  and not we_long_inCooldown  and not we_bullKeyConsumed
+we_short_fire = we_short_edge and not we_short_inCooldown and not we_bearKeyConsumed
 
 if we_long_fire
-    we_lastLongBar := bar_index
+    we_lastLongBar     := bar_index
+    we_bullKeyConsumed := true   // block further longs from this same key level
 
 if we_short_fire
-    we_lastShortBar := bar_index
+    we_lastShortBar    := bar_index
+    we_bearKeyConsumed := true   // block further shorts from this same key level
 
 // LONG: draw the target IFVG — we_targetBullTop/Bot computed just above on this same bar
 if we_long_fire and ifvg_bear_inv_ary.size() > 0
