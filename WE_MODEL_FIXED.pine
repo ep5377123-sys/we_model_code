@@ -684,15 +684,36 @@ we_recentSweepHigh = not na(we_lastSweepHighTime) and (time - we_lastSweepHighTi
 we_recentTapBull   = not na(we_lastTapBullTime)   and (time - we_lastTapBullTime)   <= we_recent_ms
 we_recentTapBear   = not na(we_lastTapBearTime)   and (time - we_lastTapBearTime)   <= we_recent_ms
 
-//------------------------- Track IFVG creation times
-var int we_lastBullIfvgTime = na
-var int we_lastBearIfvgTime = na
+//------------------------- Track IFVG creation times (FIRST IFVG after key event only)
+var int  we_lastBullIfvgTime   = na
+var int  we_lastBearIfvgTime   = na
+var bool we_waitingForBullIfvg = false  // set when key event fires; cleared when first IFVG locks in
+var bool we_waitingForBearIfvg = false
+var int  we_targetBullXval     = na     // x_val of the IFVG to draw on LONG signal
+var int  we_targetBearXval     = na     // x_val of the IFVG to draw on SHORT signal
 
-if ifvg_bull_created
-    we_lastBullIfvgTime := time
+// When a new key level event fires, reset and wait for the FIRST IFVG that follows it
+if we_sweepLow_15m or we_tapBullFvg_15m
+    we_waitingForBullIfvg := true
+    we_lastBullIfvgTime   := na
+    we_targetBullXval     := na
 
-if ifvg_bear_created
-    we_lastBearIfvgTime := time
+if we_sweepHigh_15m or we_tapBearFvg_15m
+    we_waitingForBearIfvg := true
+    we_lastBearIfvgTime   := na
+    we_targetBearXval     := na
+
+// Lock in only the FIRST bull IFVG formed after the active key event; ignore later ones
+if ifvg_bull_created and we_waitingForBullIfvg
+    we_lastBullIfvgTime   := time
+    we_targetBullXval     := time  // newly inverted IFVG has x_val == current bar time
+    we_waitingForBullIfvg := false // stop — do not overwrite with later IFVGs
+
+// Lock in only the FIRST bear IFVG formed after the active key event; ignore later ones
+if ifvg_bear_created and we_waitingForBearIfvg
+    we_lastBearIfvgTime   := time
+    we_targetBearXval     := time
+    we_waitingForBearIfvg := false
 
 we_recentBullIfvg = not na(we_lastBullIfvgTime) and (time - we_lastBullIfvgTime) <= (3 * 60000)
 we_recentBearIfvg = not na(we_lastBearIfvgTime) and (time - we_lastBearIfvgTime) <= (3 * 60000)
@@ -740,15 +761,31 @@ if we_long_fire
 if we_short_fire
     we_lastShortBar := bar_index
 
-// LONG uses the newest bullish IFVG (bearish FVG that inverted bullish → stored in ifvg_bear_inv_ary)
-if we_long_fire and array.size(ifvg_bear_inv_ary) > 0
-    usedBullIfvg = array.get(ifvg_bear_inv_ary, array.size(ifvg_bear_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_long_ary, usedBullIfvg)
+// LONG: find the specific IFVG locked in as the first one after the key event
+if we_long_fire and ifvg_bear_inv_ary.size() > 0
+    found_bull = false
+    if not na(we_targetBullXval)
+        for i = ifvg_bear_inv_ary.size() - 1 to 0
+            candidate = ifvg_bear_inv_ary.get(i)
+            if candidate.x_val == we_targetBullXval
+                ifvg_push_used(ifvg_used_long_ary, candidate)
+                found_bull := true
+                break
+    if not found_bull  // fallback: target was already mitigated/removed, use most recent
+        ifvg_push_used(ifvg_used_long_ary, array.get(ifvg_bear_inv_ary, ifvg_bear_inv_ary.size() - 1))
 
-// SHORT uses the newest bearish IFVG (bullish FVG that inverted bearish → stored in ifvg_bull_inv_ary)
-if we_short_fire and array.size(ifvg_bull_inv_ary) > 0
-    usedBearIfvg = array.get(ifvg_bull_inv_ary, array.size(ifvg_bull_inv_ary) - 1)
-    ifvg_push_used(ifvg_used_short_ary, usedBearIfvg)
+// SHORT: find the specific IFVG locked in as the first one after the key event
+if we_short_fire and ifvg_bull_inv_ary.size() > 0
+    found_bear = false
+    if not na(we_targetBearXval)
+        for i = ifvg_bull_inv_ary.size() - 1 to 0
+            candidate = ifvg_bull_inv_ary.get(i)
+            if candidate.x_val == we_targetBearXval
+                ifvg_push_used(ifvg_used_short_ary, candidate)
+                found_bear := true
+                break
+    if not found_bear  // fallback: target was already mitigated/removed, use most recent
+        ifvg_push_used(ifvg_used_short_ary, array.get(ifvg_bull_inv_ary, ifvg_bull_inv_ary.size() - 1))
 
 //------------------------- Alerts + Markers
 alertcondition(we_long_fire,  "WE MODEL LONG",  "WE MODEL LONG setup")
