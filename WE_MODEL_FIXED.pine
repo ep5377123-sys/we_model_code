@@ -669,21 +669,28 @@ we_sweepLow_15m  = hl_lowMitigatedCount  > hl_lowMitigatedCount[1]
 we_sweepHigh_15m = hl_highMitigatedCount > hl_highMitigatedCount[1]
 
 //------------------------- One-setup-per-key-level gate
-// Consumed = true after the first valid signal fires from the current key event.
-// Resets to false only when a genuinely new key event fires, allowing the next setup.
-var bool we_bullKeyConsumed = false
-var bool we_bearKeyConsumed = false
+// Each key event is identified by its source:
+//   Tap   → we_lastBull15Time  / we_lastBear15Time   (the 15m FVG's own formation time;
+//            stays constant even if price re-enters the same zone multiple times)
+//   Sweep → we_lastSweepLowTime / we_lastSweepHighTime (unique per HL level deleted)
+//
+// A signal is blocked only when ALL currently active key events for that direction have
+// already produced a signal. If even one active key event is new/unmatched, a fresh
+// setup is allowed. This prevents re-tapping the same 15m FVG from resetting the gate.
+var int we_consumedBullTapFvgT    = na  // we_lastBull15Time  when last LONG fired from tap
+var int we_consumedBullSweepLowT  = na  // we_lastSweepLowTime when last LONG fired from sweep
+var int we_consumedBearTapFvgT    = na  // we_lastBear15Time  when last SHORT fired from tap
+var int we_consumedBearSweepHighT = na  // we_lastSweepHighTime when last SHORT fired from sweep
 
-//------------------------- Update timestamps + reset consumed flags on new key event
-if we_sweepLow_15m or we_tapBullFvg_15m
-    we_lastSweepLowTime  := we_sweepLow_15m  ? time : we_lastSweepLowTime
-    we_lastTapBullTime   := we_tapBullFvg_15m ? time : we_lastTapBullTime
-    we_bullKeyConsumed   := false   // new key event — allow one fresh setup
-
-if we_sweepHigh_15m or we_tapBearFvg_15m
-    we_lastSweepHighTime := we_sweepHigh_15m ? time : we_lastSweepHighTime
-    we_lastTapBearTime   := we_tapBearFvg_15m ? time : we_lastTapBearTime
-    we_bearKeyConsumed   := false
+//------------------------- Update timestamps
+if we_sweepLow_15m
+    we_lastSweepLowTime := time
+if we_sweepHigh_15m
+    we_lastSweepHighTime := time
+if we_tapBullFvg_15m
+    we_lastTapBullTime := time
+if we_tapBearFvg_15m
+    we_lastTapBearTime := time
 
 //------------------------- Recent checks
 we_recentSweepLow  = not na(we_lastSweepLowTime)  and (time - we_lastSweepLowTime)  <= we_recent_ms
@@ -778,16 +785,34 @@ var int we_lastShortBar = na
 we_long_inCooldown  = not na(we_lastLongBar)  and (bar_index - we_lastLongBar)  <= we_sameDirCooldownBars
 we_short_inCooldown = not na(we_lastShortBar) and (bar_index - we_lastShortBar) <= we_sameDirCooldownBars
 
+// Consumed = true when ALL active key events for this direction match a recorded signal.
+// Re-tapping the SAME 15m FVG keeps the same we_lastBull15Time → stays consumed.
+// Only a different FVG or a new HL sweep produces a fresh, unconsumed key event.
+we_bullKeyConsumed = (
+    (not we_recentTapBull  or we_lastBull15Time   == we_consumedBullTapFvgT)  and
+    (not we_recentSweepLow or we_lastSweepLowTime == we_consumedBullSweepLowT)
+)
+we_bearKeyConsumed = (
+    (not we_recentTapBear   or we_lastBear15Time    == we_consumedBearTapFvgT)   and
+    (not we_recentSweepHigh or we_lastSweepHighTime == we_consumedBearSweepHighT)
+)
+
 we_long_fire  = we_long_edge  and not we_long_inCooldown  and not we_bullKeyConsumed
 we_short_fire = we_short_edge and not we_short_inCooldown and not we_bearKeyConsumed
 
 if we_long_fire
-    we_lastLongBar     := bar_index
-    we_bullKeyConsumed := true   // block further longs from this same key level
+    we_lastLongBar := bar_index
+    if we_recentTapBull   // stamp which FVG tap produced this signal
+        we_consumedBullTapFvgT   := we_lastBull15Time
+    if we_recentSweepLow  // stamp which sweep produced this signal
+        we_consumedBullSweepLowT := we_lastSweepLowTime
 
 if we_short_fire
-    we_lastShortBar    := bar_index
-    we_bearKeyConsumed := true   // block further shorts from this same key level
+    we_lastShortBar := bar_index
+    if we_recentTapBear
+        we_consumedBearTapFvgT    := we_lastBear15Time
+    if we_recentSweepHigh
+        we_consumedBearSweepHighT := we_lastSweepHighTime
 
 // LONG: draw the target IFVG — we_targetBullTop/Bot computed just above on this same bar
 if we_long_fire and ifvg_bear_inv_ary.size() > 0
